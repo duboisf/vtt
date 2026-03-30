@@ -1,0 +1,50 @@
+{
+  "hotkey": "ctrl+shift+space",
+  "hotkey_mode": "hold",
+  "openai": {
+    "base_url": "https://api.openai.com/v1",
+    "model": "gpt-4o-mini-transcribe",
+    "organization": "",
+    "project": "",
+    "language": "en",
+    "prompt_hint": "Transcribe clearly and preserve technical terminology.",
+    "vocabulary": [
+      "OpenAI",
+      "GPT",
+      "VTT",
+      "ffmpeg",
+      "xdotool"
+    ],
+    "request_timeout_seconds": 45
+  },
+  "recording": {
+    "backend": "auto",
+    "device": "default",
+    "sample_rate": 16000,
+    "channels": 1,
+    "max_duration_seconds": 120
+  },
+  "insertion": {
+    "mode": "auto",
+    "default_paste_key": "ctrl+v",
+    "terminal_paste_key": "ctrl+shift+v",
+    "type_delay_ms": 1,
+    "restore_clipboard": true,
+    "terminal_classes": [
+      "Alacritty",
+      "kitty",
+      "org.wezfurlong.wezterm",
+      "XTerm",
+      "gnome-terminal-server",
+      "code",
+      "Cursor"
+    ]
+  },
+  "overlay": {
+    "width": 460,
+    "height": 132,
+    "margin_top": 44,
+    "opacity": 0.94,
+    "auto_hide_millis": 1800
+  }
+}

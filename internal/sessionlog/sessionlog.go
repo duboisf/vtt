@@ -1,0 +1,74 @@
+package sessionlog
+
+import (
+	"io"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+type Session struct {
+	path string
+	file *os.File
+}
+
+func Start() (*Session, error) {
+	dir, err := logDir()
+	if err != nil {
+		return nil, err
+	}
+
+	name := time.Now().Format("20060102-150405") + ".log"
+	path := filepath.Join(dir, name)
+
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, err
+	}
+
+	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
+	log.SetOutput(io.MultiWriter(os.Stderr, file))
+
+	return &Session{
+		path: path,
+		file: file,
+	}, nil
+}
+
+func (s *Session) Path() string {
+	if s == nil {
+		return ""
+	}
+	return s.path
+}
+
+func (s *Session) Close() error {
+	if s == nil || s.file == nil {
+		return nil
+	}
+	log.SetOutput(os.Stderr)
+	return s.file.Close()
+}
+
+func Dir() (string, error) {
+	return logDir()
+}
+
+func logDir() (string, error) {
+	base := strings.TrimSpace(os.Getenv("XDG_STATE_HOME"))
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		base = filepath.Join(home, ".local", "state")
+	}
+
+	dir := filepath.Join(base, "vtt", "sessions")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	return dir, nil
+}

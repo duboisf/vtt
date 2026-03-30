@@ -1,0 +1,319 @@
+package app
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"sync"
+	"time"
+
+	"vtt/internal/config"
+	"vtt/internal/hotkeys"
+	"vtt/internal/injector"
+	"vtt/internal/openai"
+	"vtt/internal/overlay"
+	"vtt/internal/recorder"
+	"vtt/internal/securestore"
+)
+
+type App struct {
+	cfg        config.Config
+	overlay    *overlay.Overlay
+	recorder   *recorder.Recorder
+	injector   *injector.Injector
+	transcribe *openai.Client
+	store      *securestore.Store
+
+	mu           sync.Mutex
+	recording    *recordingState
+	transcribing bool
+	lastToggle   time.Time
+	sequence     uint64
+}
+
+type recordingState struct {
+	id        uint64
+	startedAt time.Time
+	session   *recorder.Session
+	target    injector.Target
+}
+
+const minToggleInterval = 250 * time.Millisecond
+
+func New(cfg config.Config) *App {
+	return &App{
+		cfg:   cfg,
+		store: securestore.New(),
+	}
+}
+
+func (a *App) Run(ctx context.Context) error {
+	if err := a.cfg.Validate(); err != nil {
+		return err
+	}
+	log.Printf("starting vtt session")
+
+	apiKey, err := a.store.APIKey()
+	if err != nil {
+		return err
+	}
+
+	a.recorder = recorder.New()
+	a.injector = injector.New(a.cfg.Insertion)
+	a.transcribe = openai.New(apiKey, a.cfg.OpenAI)
+
+	a.overlay, err = overlay.New(a.cfg.Overlay)
+	if err != nil {
+		return err
+	}
+	defer a.overlay.Close()
+
+	hk, err := a.registerHotkeyWithFallback()
+	if err != nil {
+		return err
+	}
+	defer hk.Close()
+
+	a.overlay.ShowHint(a.hotkeyHint(hk.Shortcut()))
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Printf("received shutdown signal")
+			return a.shutdown()
+		case <-hk.Down():
+			a.handleDown(ctx)
+		case <-hk.Up():
+			a.handleUp(ctx)
+		}
+	}
+}
+
+func (a *App) handleDown(ctx context.Context) {
+	if a.cfg.HotkeyMode == "toggle" {
+		a.handleToggle(ctx)
+		return
+	}
+	a.handleStart(ctx)
+}
+
+func (a *App) handleUp(ctx context.Context) {
+	if a.cfg.HotkeyMode != "hold" {
+		return
+	}
+	a.handleStop(ctx)
+}
+
+func (a *App) handleToggle(ctx context.Context) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if time.Since(a.lastToggle) < minToggleInterval {
+		return
+	}
+	a.lastToggle = time.Now()
+
+	if a.transcribing {
+		return
+	}
+
+	if a.recording == nil {
+		a.startRecordingLocked(ctx)
+		return
+	}
+
+	a.stopRecordingLocked(ctx)
+}
+
+func (a *App) handleStart(ctx context.Context) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.transcribing || a.recording != nil {
+		return
+	}
+
+	a.startRecordingLocked(ctx)
+}
+
+func (a *App) handleStop(ctx context.Context) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.transcribing || a.recording == nil {
+		return
+	}
+
+	a.stopRecordingLocked(ctx)
+}
+
+func (a *App) startRecordingLocked(ctx context.Context) {
+	target, err := a.injector.CaptureTarget(ctx)
+	if err != nil {
+		log.Printf("capture target: %v", err)
+		a.overlay.ShowError(err)
+		return
+	}
+	log.Printf("starting recording for window=%s class=%s title=%q",
+		target.WindowID, target.WindowClass, target.WindowName)
+
+	session, err := a.recorder.Start(ctx, a.cfg.Recording)
+	if err != nil {
+		log.Printf("start recording: %v", err)
+		a.overlay.ShowError(err)
+		return
+	}
+
+	a.sequence++
+	state := &recordingState{
+		id:        a.sequence,
+		startedAt: time.Now(),
+		session:   session,
+		target:    target,
+	}
+	a.recording = state
+	a.overlay.ShowListening(target.WindowClass)
+	log.Printf("recording started: %s", state.session.Path())
+
+	if a.cfg.Recording.MaxDurationSeconds > 0 {
+		go a.forceStopAfter(ctx, state.id, time.Duration(a.cfg.Recording.MaxDurationSeconds)*time.Second)
+	}
+}
+
+func (a *App) stopRecordingLocked(ctx context.Context) {
+	state := a.recording
+	a.recording = nil
+	a.transcribing = true
+	a.overlay.ShowTranscribing(state.session.Path())
+	log.Printf("stopping recording and transcribing after %s: %s",
+		time.Since(state.startedAt).Round(10*time.Millisecond), state.session.Path())
+
+	go a.finishRecording(ctx, state)
+}
+
+func (a *App) registerHotkeyWithFallback() (*hotkeys.Registration, error) {
+	candidates := []string{
+		a.cfg.Hotkey,
+		"ctrl+alt+space",
+		"f8",
+		"f9",
+		"shift+f8",
+	}
+
+	var lastErr error
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+
+		hk, err := hotkeys.Register(candidate)
+		if err == nil {
+			if candidate != a.cfg.Hotkey {
+				log.Printf("hotkey %s unavailable, using %s", a.cfg.Hotkey, candidate)
+			}
+			return hk, nil
+		}
+		lastErr = err
+	}
+
+	if lastErr == nil {
+		lastErr = errors.New("no hotkey candidates available")
+	}
+	return nil, lastErr
+}
+
+func (a *App) forceStopAfter(ctx context.Context, id uint64, maxDuration time.Duration) {
+	timer := time.NewTimer(maxDuration)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return
+	case <-timer.C:
+	}
+
+	a.mu.Lock()
+	if a.recording == nil || a.recording.id != id || a.transcribing {
+		a.mu.Unlock()
+		return
+	}
+	state := a.recording
+	a.recording = nil
+	a.transcribing = true
+	a.mu.Unlock()
+
+	a.overlay.ShowTranscribing(state.session.Path())
+	log.Printf("auto-stopping recording after timeout: %s", state.session.Path())
+	go a.finishRecording(ctx, state)
+}
+
+func (a *App) finishRecording(ctx context.Context, state *recordingState) {
+	defer func() {
+		a.mu.Lock()
+		a.transcribing = false
+		a.mu.Unlock()
+	}()
+
+	stopCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	if err := state.session.Stop(stopCtx); err != nil {
+		log.Printf("stop recording: %v", err)
+		a.overlay.ShowError(err)
+		state.session.Cleanup()
+		return
+	}
+	defer state.session.Cleanup()
+	log.Printf("audio captured successfully: %s", state.session.Path())
+
+	text, err := a.transcribe.Transcribe(ctx, state.session.Path())
+	if err != nil {
+		log.Printf("transcribe audio: %v", err)
+		a.overlay.ShowError(err)
+		return
+	}
+	log.Printf("transcription complete: %d characters", len(text))
+
+	if text == "" {
+		log.Printf("transcription was empty")
+		a.overlay.ShowError(errors.New("transcription came back empty"))
+		return
+	}
+
+	if err := a.injector.Insert(ctx, state.target, text); err != nil {
+		log.Printf("insert transcript: %v", err)
+		a.overlay.ShowError(err)
+		return
+	}
+	log.Printf("transcript inserted into window=%s", state.target.WindowID)
+
+	a.overlay.ShowSuccess(text)
+}
+
+func (a *App) hotkeyHint(shortcut string) string {
+	if a.cfg.HotkeyMode == "toggle" {
+		return fmt.Sprintf("Press %s to start and press again to stop", shortcut)
+	}
+	return fmt.Sprintf("Hold %s to record, then release to transcribe", shortcut)
+}
+
+func (a *App) shutdown() error {
+	a.mu.Lock()
+	state := a.recording
+	a.recording = nil
+	a.mu.Unlock()
+
+	if state != nil {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := state.session.Stop(stopCtx); err != nil {
+			log.Printf("shutdown: %v", err)
+		}
+		state.session.Cleanup()
+	}
+
+	return nil
+}
