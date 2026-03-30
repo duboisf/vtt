@@ -14,11 +14,14 @@ type Session struct {
 	file *os.File
 }
 
+const staleLogAge = 7 * 24 * time.Hour
+
 func Start() (*Session, error) {
 	dir, err := logDir()
 	if err != nil {
 		return nil, err
 	}
+	cleanupStaleLogs(dir)
 
 	name := time.Now().Format("20060102-150405") + ".log"
 	path := filepath.Join(dir, name)
@@ -83,4 +86,24 @@ func Warnf(format string, args ...any) {
 
 func Errorf(format string, args ...any) {
 	log.Printf("ERROR "+format, args...)
+}
+
+func cleanupStaleLogs(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-staleLogAge)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".log") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().Before(cutoff) {
+			_ = os.Remove(filepath.Join(dir, entry.Name()))
+		}
+	}
 }

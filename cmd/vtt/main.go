@@ -198,20 +198,29 @@ func readSecret() (string, error) {
 	}
 
 	if (stat.Mode() & os.ModeCharDevice) == 0 {
-		bytes, err := io.ReadAll(os.Stdin)
+		const maxKeySize = 1024
+		buf, err := io.ReadAll(io.LimitReader(os.Stdin, maxKeySize))
 		if err != nil {
 			return "", err
 		}
-		return strings.TrimSpace(string(bytes)), nil
+		defer clearBytes(buf)
+		return strings.TrimSpace(string(buf)), nil
 	}
 
 	fmt.Fprint(os.Stderr, "OpenAI API key: ")
-	bytes, err := term.ReadPassword(int(os.Stdin.Fd()))
+	buf, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Fprintln(os.Stderr)
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(bytes)), nil
+	defer clearBytes(buf)
+	return strings.TrimSpace(string(buf)), nil
+}
+
+func clearBytes(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
 }
 
 func printUsage() {

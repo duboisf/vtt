@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/atotto/clipboard"
@@ -23,6 +24,9 @@ type Target struct {
 
 type Injector struct {
 	cfg config.InsertionConfig
+
+	mu           sync.Mutex
+	restoreTimer *time.Timer
 }
 
 var quotedValuePattern = regexp.MustCompile(`"([^"]+)"`)
@@ -126,14 +130,18 @@ func (i *Injector) paste(ctx context.Context, target Target, text string) error 
 	}
 
 	if i.cfg.RestoreClipboard {
+		i.mu.Lock()
+		if i.restoreTimer != nil {
+			i.restoreTimer.Stop()
+		}
 		restore := originalClipboard
-		go func() {
-			time.Sleep(250 * time.Millisecond)
+		i.restoreTimer = time.AfterFunc(250*time.Millisecond, func() {
 			if restore == "" {
 				return
 			}
 			_ = clipboard.WriteAll(restore)
-		}()
+		})
+		i.mu.Unlock()
 	}
 
 	return nil

@@ -12,6 +12,7 @@ import (
 	"github.com/openai/openai-go/v3/option"
 
 	"vtt/internal/config"
+	"vtt/internal/sessionlog"
 )
 
 type Client struct {
@@ -24,12 +25,19 @@ const defaultProgrammerPrompt = "Transcribe for a programmer speaking naturally.
 	"obvious technical terms, acronyms, and capitalization when the audio supports " +
 	"them. Do not invent extra words that were not spoken."
 
+const defaultBaseURL = "https://api.openai.com/v1"
+
 func New(apiKey string, cfg config.OpenAIConfig) *Client {
 	timeout := time.Duration(cfg.RequestLimit) * time.Second
 
+	baseURL := strings.TrimRight(cfg.BaseURL, "/")
+	if baseURL != "" && baseURL != defaultBaseURL {
+		sessionlog.Warnf("openai base_url is non-default: %s", baseURL)
+	}
+
 	opts := []option.RequestOption{
 		option.WithAPIKey(apiKey),
-		option.WithBaseURL(strings.TrimRight(cfg.BaseURL, "/")),
+		option.WithBaseURL(baseURL),
 		option.WithRequestTimeout(timeout),
 	}
 	if org := organization(cfg); org != "" {

@@ -54,6 +54,7 @@ func (a *App) Run(ctx context.Context) error {
 		return err
 	}
 	sessionlog.Infof("starting vtt session")
+	recorder.CleanupStale()
 
 	apiKey, err := a.store.APIKey()
 	if err != nil {
@@ -156,8 +157,13 @@ func (a *App) startRecordingLocked(ctx context.Context) {
 		a.overlay.ShowError(err)
 		return
 	}
-	sessionlog.Infof("starting recording for window=%s class=%s title=%q",
-		target.WindowID, target.WindowClass, target.WindowName)
+	if a.cfg.LogWindowTitle {
+		sessionlog.Infof("starting recording for window=%s class=%s title=%q",
+			target.WindowID, target.WindowClass, target.WindowName)
+	} else {
+		sessionlog.Infof("starting recording for window=%s class=%s",
+			target.WindowID, target.WindowClass)
+	}
 
 	session, err := a.recorder.Start(ctx, a.cfg.Recording)
 	if err != nil {
