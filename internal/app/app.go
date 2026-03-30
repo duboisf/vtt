@@ -152,6 +152,8 @@ func (a *App) handleStop(ctx context.Context) {
 }
 
 func (a *App) startRecordingLocked(ctx context.Context) {
+	a.overlay.ShowListening("")
+
 	target, err := a.injector.CaptureTarget(ctx)
 	if err != nil {
 		sessionlog.Errorf("capture target: %v", err)

@@ -114,12 +114,11 @@ func (r *Recorder) Start(ctx context.Context, cfg config.RecordingConfig) (*Sess
 
 	session.stream = stream
 	stream.Start()
-
 	select {
 	case <-ctx.Done():
 		session.closeResources()
 		return nil, ctx.Err()
-	case <-time.After(80 * time.Millisecond):
+	default:
 	}
 
 	return session, nil
