@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -33,25 +32,25 @@ func run(args []string) int {
 	switch args[0] {
 	case "serve":
 		if err := runServe(); err != nil {
-			log.Printf("serve: %v", err)
+			sessionlog.Errorf("serve: %v", err)
 			return 1
 		}
 		return 0
 	case "init":
 		if err := runInit(); err != nil {
-			log.Printf("init: %v", err)
+			sessionlog.Errorf("init: %v", err)
 			return 1
 		}
 		return 0
 	case "doctor":
 		if err := runDoctor(); err != nil {
-			log.Printf("doctor: %v", err)
+			sessionlog.Errorf("doctor: %v", err)
 			return 1
 		}
 		return 0
 	case "key":
 		if err := runKey(args[1:]); err != nil {
-			log.Printf("key: %v", err)
+			sessionlog.Errorf("key: %v", err)
 			return 1
 		}
 		return 0
@@ -71,7 +70,7 @@ func runServe() error {
 	}
 	defer session.Close()
 
-	log.Printf("session log: %s", session.Path())
+	sessionlog.Infof("session log: %s", session.Path())
 
 	cfg, path, err := config.Load()
 	if err != nil {
@@ -81,8 +80,8 @@ func runServe() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	log.Printf("loaded config: %s", path)
-	log.Printf("hotkey: %s", cfg.Hotkey)
+	sessionlog.Infof("loaded config: %s", path)
+	sessionlog.Infof("hotkey: %s", cfg.Hotkey)
 
 	return app.New(cfg).Run(ctx)
 }

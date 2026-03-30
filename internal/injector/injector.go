@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"log"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"github.com/atotto/clipboard"
 
 	"vtt/internal/config"
+	"vtt/internal/sessionlog"
 )
 
 type Target struct {
@@ -107,7 +107,7 @@ func (i *Injector) paste(ctx context.Context, target Target, text string) error 
 	if isTerminal {
 		pasteKey = i.cfg.TerminalPasteKey
 	}
-	log.Printf(
+	sessionlog.Infof(
 		"pasting transcript into window=%s class=%q terminal=%t key=%s",
 		target.WindowID,
 		target.WindowClass,
