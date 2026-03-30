@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"sync"
 	"time"
@@ -16,6 +15,7 @@ import (
 	"vtt/internal/overlay"
 	"vtt/internal/recorder"
 	"vtt/internal/securestore"
+	"vtt/internal/sessionlog"
 )
 
 type App struct {
@@ -53,7 +53,7 @@ func (a *App) Run(ctx context.Context) error {
 	if err := a.cfg.Validate(); err != nil {
 		return err
 	}
-	log.Printf("starting vtt session")
+	sessionlog.Infof("starting vtt session")
 
 	apiKey, err := a.store.APIKey()
 	if err != nil {
@@ -81,7 +81,7 @@ func (a *App) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("received shutdown signal")
+			sessionlog.Infof("received shutdown signal")
 			return a.shutdown()
 		case <-hk.Down():
 			a.handleDown(ctx)
@@ -152,16 +152,16 @@ func (a *App) handleStop(ctx context.Context) {
 func (a *App) startRecordingLocked(ctx context.Context) {
 	target, err := a.injector.CaptureTarget(ctx)
 	if err != nil {
-		log.Printf("capture target: %v", err)
+		sessionlog.Errorf("capture target: %v", err)
 		a.overlay.ShowError(err)
 		return
 	}
-	log.Printf("starting recording for window=%s class=%s title=%q",
+	sessionlog.Infof("starting recording for window=%s class=%s title=%q",
 		target.WindowID, target.WindowClass, target.WindowName)
 
 	session, err := a.recorder.Start(ctx, a.cfg.Recording)
 	if err != nil {
-		log.Printf("start recording: %v", err)
+		sessionlog.Errorf("start recording: %v", err)
 		a.overlay.ShowError(err)
 		return
 	}
@@ -175,7 +175,7 @@ func (a *App) startRecordingLocked(ctx context.Context) {
 	}
 	a.recording = state
 	a.overlay.ShowListening(target.WindowClass)
-	log.Printf("recording started: %s", state.session.Path())
+	sessionlog.Infof("recording started: %s", state.session.Path())
 
 	if a.cfg.Recording.MaxDurationSeconds > 0 {
 		go a.forceStopAfter(ctx, state.id, time.Duration(a.cfg.Recording.MaxDurationSeconds)*time.Second)
@@ -187,7 +187,7 @@ func (a *App) stopRecordingLocked(ctx context.Context) {
 	a.recording = nil
 	a.transcribing = true
 	a.overlay.ShowTranscribing(state.session.Path())
-	log.Printf("stopping recording and transcribing after %s: %s",
+	sessionlog.Infof("stopping recording and transcribing after %s: %s",
 		time.Since(state.startedAt).Round(10*time.Millisecond), state.session.Path())
 
 	go a.finishRecording(ctx, state)
@@ -213,7 +213,7 @@ func (a *App) registerHotkeyWithFallback() (*hotkeys.Registration, error) {
 		hk, err := hotkeys.Register(candidate)
 		if err == nil {
 			if candidate != a.cfg.Hotkey {
-				log.Printf("hotkey %s unavailable, using %s", a.cfg.Hotkey, candidate)
+				sessionlog.Warnf("hotkey %s unavailable, using %s", a.cfg.Hotkey, candidate)
 			}
 			return hk, nil
 		}
@@ -247,7 +247,7 @@ func (a *App) forceStopAfter(ctx context.Context, id uint64, maxDuration time.Du
 	a.mu.Unlock()
 
 	a.overlay.ShowTranscribing(state.session.Path())
-	log.Printf("auto-stopping recording after timeout: %s", state.session.Path())
+	sessionlog.Warnf("auto-stopping recording after timeout: %s", state.session.Path())
 	go a.finishRecording(ctx, state)
 }
 
@@ -262,7 +262,7 @@ func (a *App) finishRecording(ctx context.Context, state *recordingState) {
 	defer cancel()
 
 	if err := state.session.Stop(stopCtx); err != nil {
-		log.Printf("stop recording: %v", err)
+		sessionlog.Errorf("stop recording: %v", err)
 		a.overlay.ShowError(err)
 		state.session.Cleanup()
 		return
@@ -273,31 +273,31 @@ func (a *App) finishRecording(ctx context.Context, state *recordingState) {
 		audioSize = info.Size()
 	}
 	if audioSize >= 0 {
-		log.Printf("audio captured successfully: %s (%d bytes)", state.session.Path(), audioSize)
+		sessionlog.Infof("audio captured successfully: %s (%d bytes)", state.session.Path(), audioSize)
 	} else {
-		log.Printf("audio captured successfully: %s", state.session.Path())
+		sessionlog.Infof("audio captured successfully: %s", state.session.Path())
 	}
 
 	text, err := a.transcribe.Transcribe(ctx, state.session.Path())
 	if err != nil {
-		log.Printf("transcribe audio: %v", err)
+		sessionlog.Errorf("transcribe audio: %v", err)
 		a.overlay.ShowError(err)
 		return
 	}
-	log.Printf("transcription complete: %d characters", len(text))
+	sessionlog.Infof("transcription complete: %d characters", len(text))
 
 	if text == "" {
-		log.Printf("transcription was empty")
+		sessionlog.Warnf("transcription was empty")
 		a.overlay.ShowError(errors.New("transcription came back empty"))
 		return
 	}
 
 	if err := a.injector.Insert(ctx, state.target, text); err != nil {
-		log.Printf("insert transcript: %v", err)
+		sessionlog.Errorf("insert transcript: %v", err)
 		a.overlay.ShowError(err)
 		return
 	}
-	log.Printf("transcript inserted into window=%s", state.target.WindowID)
+	sessionlog.Infof("transcript inserted into window=%s", state.target.WindowID)
 
 	a.overlay.ShowSuccess(text)
 }
@@ -319,7 +319,7 @@ func (a *App) shutdown() error {
 		stopCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		if err := state.session.Stop(stopCtx); err != nil {
-			log.Printf("shutdown: %v", err)
+			sessionlog.Warnf("shutdown: %v", err)
 		}
 		state.session.Cleanup()
 	}
