@@ -72,20 +72,42 @@ func Check() error {
 	return err
 }
 
-func (r *Recorder) Start(ctx context.Context, cfg config.RecordingConfig) (*Session, error) {
-	path, err := tempRecordingPath()
-	if err != nil {
-		return nil, err
-	}
+const staleRecordingAge = 24 * time.Hour
 
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0o600)
+// CleanupStale removes orphan recording files older than 24 hours.
+func CleanupStale() {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return
+	}
+	pattern := filepath.Join(dir, "vtt", "recording-*.wav")
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-staleRecordingAge)
+	for _, path := range matches {
+		info, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		if info.ModTime().Before(cutoff) {
+			_ = os.Remove(path)
+		}
+	}
+}
+
+func (r *Recorder) Start(ctx context.Context, cfg config.RecordingConfig) (*Session, error) {
+	file, err := createTempRecording()
 	if err != nil {
 		return nil, err
 	}
+	path := file.Name()
 
 	wav, err := newWAVFile(file, cfg.SampleRate, cfg.Channels)
 	if err != nil {
 		file.Close()
+		os.Remove(path)
 		return nil, err
 	}
 
@@ -252,25 +274,17 @@ func newPulseClient() (*pulse.Client, error) {
 	)
 }
 
-func tempRecordingPath() (string, error) {
+func createTempRecording() (*os.File, error) {
 	dir, err := os.UserCacheDir()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	path := filepath.Join(dir, "vtt")
 	if err := os.MkdirAll(path, 0o700); err != nil {
-		return "", err
+		return nil, err
 	}
 
-	file, err := os.CreateTemp(path, "recording-*.wav")
-	if err != nil {
-		return "", err
-	}
-	name := file.Name()
-	if err := file.Close(); err != nil {
-		return "", err
-	}
-	return name, nil
+	return os.CreateTemp(path, "recording-*.wav")
 }
 
 func validRecording(path string) error {

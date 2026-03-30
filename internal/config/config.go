@@ -12,12 +12,13 @@ import (
 const fileName = "config.json"
 
 type Config struct {
-	Hotkey     string          `json:"hotkey"`
-	HotkeyMode string          `json:"hotkey_mode"`
-	OpenAI     OpenAIConfig    `json:"openai"`
-	Recording  RecordingConfig `json:"recording"`
-	Insertion  InsertionConfig `json:"insertion"`
-	Overlay    OverlayConfig   `json:"overlay"`
+	Hotkey         string          `json:"hotkey"`
+	HotkeyMode     string          `json:"hotkey_mode"`
+	LogWindowTitle bool            `json:"log_window_title"`
+	OpenAI         OpenAIConfig    `json:"openai"`
+	Recording      RecordingConfig `json:"recording"`
+	Insertion      InsertionConfig `json:"insertion"`
+	Overlay        OverlayConfig   `json:"overlay"`
 }
 
 type OpenAIConfig struct {
@@ -183,8 +184,8 @@ func (c Config) Validate() error {
 		return fmt.Errorf("hotkey_mode must be hold or toggle")
 	}
 
-	if c.OpenAI.RequestLimit <= 0 {
-		return errors.New("openai.request_timeout_seconds must be greater than zero")
+	if c.OpenAI.RequestLimit <= 0 || c.OpenAI.RequestLimit > 300 {
+		return errors.New("openai.request_timeout_seconds must be between 1 and 300")
 	}
 
 	switch c.Insertion.Mode {
@@ -193,12 +194,20 @@ func (c Config) Validate() error {
 		return fmt.Errorf("insertion.mode must be auto, clipboard, or type")
 	}
 
-	if c.Recording.SampleRate <= 0 {
-		return errors.New("recording.sample_rate must be greater than zero")
+	if c.Insertion.TypeDelayMS < 0 || c.Insertion.TypeDelayMS > 1000 {
+		return errors.New("insertion.type_delay_ms must be between 0 and 1000")
 	}
 
-	if c.Recording.Channels <= 0 {
-		return errors.New("recording.channels must be greater than zero")
+	if c.Recording.SampleRate <= 0 || c.Recording.SampleRate > 48000 {
+		return errors.New("recording.sample_rate must be between 1 and 48000")
+	}
+
+	if c.Recording.Channels <= 0 || c.Recording.Channels > 2 {
+		return errors.New("recording.channels must be 1 or 2")
+	}
+
+	if c.Recording.MaxDurationSeconds < 0 || c.Recording.MaxDurationSeconds > 600 {
+		return errors.New("recording.max_duration_seconds must be between 0 and 600")
 	}
 
 	switch c.Recording.Backend {
