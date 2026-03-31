@@ -423,7 +423,14 @@ func (a *App) finishRecording(ctx context.Context, state *recordingState) {
 	}
 
 	if a.cfg.PostProcess.Enabled {
-		text = a.transcribe.PostProcess(spanCtx, a.cfg.PostProcess, text)
+		_, ppSpan := telemetry.StartSpan(spanCtx, "vocis.postprocess",
+			attribute.Int("input.length", len(text)),
+			attribute.String("model", a.cfg.PostProcess.Model),
+		)
+		cleaned := a.transcribe.PostProcess(spanCtx, a.cfg.PostProcess, text)
+		ppSpan.SetAttributes(attribute.Int("output.length", len(cleaned)))
+		telemetry.EndSpan(ppSpan, nil)
+		text = cleaned
 	}
 
 	insertCtx, insertSpan := telemetry.StartSpan(spanCtx, "vocis.inject",

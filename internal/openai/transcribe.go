@@ -332,10 +332,12 @@ func (s *DictationSession) Finalize(ctx context.Context) (FinalizeResult, error)
 
 	_, commitSpan := telemetry.StartSpan(ctx, "vocis.transcribe.commit")
 	if err := stream.Commit(ctx); err != nil {
-		telemetry.EndSpan(commitSpan, err)
 		if s.shouldIgnoreEmptyCommit(err, stream) {
+			commitSpan.SetAttributes(attribute.Bool("commit.skipped", true))
+			telemetry.EndSpan(commitSpan, nil)
 			return FinalizeResult{Text: text}, nil
 		}
+		telemetry.EndSpan(commitSpan, err)
 		return FinalizeResult{}, err
 	}
 	telemetry.EndSpan(commitSpan, nil)
@@ -345,16 +347,16 @@ func (s *DictationSession) Finalize(ctx context.Context) (FinalizeResult, error)
 		attribute.Int("segment_count", s.segmentCountValue()),
 	)
 	finalText, err := s.waitForFinalText(ctx)
-	telemetry.EndSpan(waitSpan, err)
 	if err != nil {
-		if s.shouldIgnoreMissingTrailingFinal(err, stream) {
+		if s.shouldIgnoreMissingTrailingFinal(err, stream) || s.shouldIgnoreEmptyCommit(err, stream) {
+			waitSpan.SetAttributes(attribute.Bool("trailing.skipped", true))
+			telemetry.EndSpan(waitSpan, nil)
 			return FinalizeResult{Text: text}, nil
 		}
-		if s.shouldIgnoreEmptyCommit(err, stream) {
-			return FinalizeResult{Text: text}, nil
-		}
+		telemetry.EndSpan(waitSpan, err)
 		return FinalizeResult{}, err
 	}
+	telemetry.EndSpan(waitSpan, nil)
 
 	return FinalizeResult{Text: appendSegmentText(text, finalText)}, nil
 }
