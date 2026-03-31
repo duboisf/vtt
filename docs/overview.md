@@ -7,9 +7,11 @@ At a high level:
 - a global hotkey starts dictation
 - the overlay appears immediately
 - local microphone capture starts first
+- target-window capture happens after local recording has already started
 - early audio is buffered while the OpenAI realtime transcription session connects
-- audio is streamed to OpenAI
-- on release or stop, the stream is committed
+- buffered audio is flushed into the realtime session as soon as it is ready
+- audio is streamed to OpenAI after that
+- on release or stop, the dictation session decides whether there is trailing audio left to commit
 - the final transcript is inserted back into the previously focused app
 
 Important constraints:
@@ -26,5 +28,6 @@ Core product choices:
 - very short recordings are silently discarded
 - terminal windows use a terminal-safe paste shortcut
 - transcription is realtime-streamed, not uploaded from a WAV file
+- turn assembly and trailing-flush decisions live in the OpenAI dictation session, not in the app layer
 
 If you only need the “what is this thing” version of the repo, stop here.
