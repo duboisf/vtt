@@ -38,6 +38,7 @@ type Overlay struct {
 	liveBody     string
 	wavePhase    float64
 	partialToken uint64
+	height       int
 }
 
 type viewState struct {
@@ -69,9 +70,10 @@ func New(cfg config.OverlayConfig) (*Overlay, error) {
 	win.Stack(xproto.StackModeAbove)
 
 	return &Overlay{
-		cfg: cfg,
-		x:   xu,
-		win: win,
+		cfg:    cfg,
+		x:      xu,
+		win:    win,
+		height: cfg.Height,
 		state: viewState{
 			title:    "Ready",
 			subtitle: "Voice typing is armed",
@@ -222,6 +224,8 @@ func (o *Overlay) show(state viewState, autoHide bool) {
 	o.state = state
 	o.level = 0
 	o.wavePhase = 0
+	o.height = o.cfg.Height
+	o.win.Resize(o.cfg.Width, o.cfg.Height)
 	if state.title == "Listening" {
 		o.liveBody = state.body
 	} else {
@@ -271,8 +275,29 @@ func (o *Overlay) SetLevel(level float64) {
 	o.drawLocked()
 }
 
+const (
+	bodyStartY = 90
+	lineHeight = 16
+	bodyPadBot = 12
+)
+
 func (o *Overlay) drawLocked() {
-	img := image.NewRGBA(image.Rect(0, 0, o.cfg.Width, o.cfg.Height))
+	charsPerLine := o.bodyTextLimit()
+	bodyLines := wrapLines(o.state.body, charsPerLine)
+
+	needed := o.cfg.Height
+	if len(bodyLines) > 1 {
+		needed = bodyStartY + len(bodyLines)*lineHeight + bodyPadBot
+	}
+	if needed < o.cfg.Height {
+		needed = o.cfg.Height
+	}
+	if needed != o.height {
+		o.height = needed
+		o.win.Resize(o.cfg.Width, needed)
+	}
+
+	img := image.NewRGBA(image.Rect(0, 0, o.cfg.Width, o.height))
 	bg := color.RGBA{R: 12, G: 18, B: 31, A: 255}
 	draw.Draw(img, img.Bounds(), &image.Uniform{C: bg}, image.Point{}, draw.Src)
 
@@ -290,8 +315,10 @@ func (o *Overlay) drawLocked() {
 
 	writeText(img, 150, 36, o.state.title, o.state.accent, basicfont.Face7x13)
 	writeText(img, 150, 62, o.state.subtitle, color.RGBA{R: 226, G: 232, B: 240, A: 255}, basicfont.Face7x13)
-	if strings.TrimSpace(o.state.body) != "" {
-		writeText(img, 150, 90, shorten(o.state.body, o.bodyTextLimit()), color.RGBA{R: 148, G: 163, B: 184, A: 255}, basicfont.Face7x13)
+
+	bodyColor := color.RGBA{R: 148, G: 163, B: 184, A: 255}
+	for i, line := range bodyLines {
+		writeText(img, 150, bodyStartY+i*lineHeight, line, bodyColor, basicfont.Face7x13)
 	}
 
 	ximg := xgraphics.NewConvert(o.x, img)
@@ -503,6 +530,44 @@ func textLimit(width int, rightPadding int) int {
 		return minChars
 	}
 	return chars
+}
+
+func wrapLines(text string, maxChars int) []string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	if maxChars <= 0 {
+		return []string{text}
+	}
+
+	runes := []rune(text)
+	if len(runes) <= maxChars {
+		return []string{text}
+	}
+
+	var lines []string
+	for len(runes) > 0 {
+		if len(runes) <= maxChars {
+			lines = append(lines, string(runes))
+			break
+		}
+		// Find last space within limit for word wrap.
+		cut := maxChars
+		for i := maxChars; i > maxChars/2; i-- {
+			if runes[i] == ' ' {
+				cut = i
+				break
+			}
+		}
+		lines = append(lines, string(runes[:cut]))
+		runes = runes[cut:]
+		// Skip leading space on next line.
+		if len(runes) > 0 && runes[0] == ' ' {
+			runes = runes[1:]
+		}
+	}
+	return lines
 }
 
 func shorten(s string, max int) string {

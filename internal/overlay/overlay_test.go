@@ -48,6 +48,38 @@ func TestDisplayedListeningTextTreatsHelperAsEmpty(t *testing.T) {
 	}
 }
 
+func TestWrapLinesShortTextSingleLine(t *testing.T) {
+	t.Parallel()
+
+	lines := wrapLines("hello world", 60)
+	if len(lines) != 1 || lines[0] != "hello world" {
+		t.Fatalf("wrapLines = %v, want [hello world]", lines)
+	}
+}
+
+func TestWrapLinesLongTextWraps(t *testing.T) {
+	t.Parallel()
+
+	lines := wrapLines("the quick brown fox jumps over the lazy dog", 20)
+	if len(lines) < 2 {
+		t.Fatalf("expected multiple lines, got %v", lines)
+	}
+	for _, line := range lines {
+		if len([]rune(line)) > 20 {
+			t.Fatalf("line %q exceeds 20 chars", line)
+		}
+	}
+}
+
+func TestWrapLinesEmptyReturnsNil(t *testing.T) {
+	t.Parallel()
+
+	lines := wrapLines("", 60)
+	if lines != nil {
+		t.Fatalf("wrapLines empty = %v, want nil", lines)
+	}
+}
+
 func TestShortenUsesASCIIEllipsis(t *testing.T) {
 	t.Parallel()
 

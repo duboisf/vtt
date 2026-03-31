@@ -21,7 +21,6 @@ import (
 type App struct {
 	cfg        config.Config
 	overlay    overlayUI
-	hotkey     hotkeyController
 	recorder   *recorder.Recorder
 	injector   injectorClient
 	transcribe *openai.Client
@@ -42,6 +41,7 @@ type recordingState struct {
 	dictation *openai.DictationSession
 	cancel    context.CancelFunc
 	target    injector.Target
+	liveText  string
 }
 
 type overlayUI interface {
@@ -61,11 +61,6 @@ type injectorClient interface {
 	CaptureTarget(ctx context.Context) (injector.Target, error)
 	Insert(ctx context.Context, target injector.Target, text string) error
 	InsertLive(ctx context.Context, target injector.Target, text string) error
-}
-
-type hotkeyController interface {
-	Lock()
-	Unlock()
 }
 
 const minToggleInterval = 250 * time.Millisecond
@@ -104,7 +99,6 @@ func (a *App) Run(ctx context.Context) error {
 		return err
 	}
 	defer hk.Close()
-	a.hotkey = hk
 
 	a.overlay.ShowHint(a.hotkeyHint(hk.Shortcut()))
 
@@ -352,14 +346,21 @@ func (a *App) finishRecording(ctx context.Context, state *recordingState) {
 		a.showCompletionError(err)
 		return
 	}
-	text := strings.TrimSpace(result.Text)
-	sessionlog.Infof("transcription complete: %d characters", len(text))
+	trailing := strings.TrimSpace(result.Text)
+
+	text := state.liveText
+	if trailing != "" {
+		if text == "" {
+			text = trailing
+		} else {
+			text = text + " " + trailing
+		}
+	}
+	text = strings.TrimSpace(text)
+	sessionlog.Infof("transcription complete: %d characters (%d live + %d trailing)",
+		len(text), len(state.liveText), len(trailing))
 
 	if text == "" {
-		if a.cfg.Streaming.Mode == "segment" {
-			a.hideCompletionOverlay()
-			return
-		}
 		sessionlog.Warnf("transcription was empty")
 		a.showCompletionError(errors.New("transcription came back empty"))
 		return
@@ -371,11 +372,6 @@ func (a *App) finishRecording(ctx context.Context, state *recordingState) {
 		return
 	}
 	sessionlog.Infof("transcript inserted into window=%s", state.target.WindowID)
-
-	if a.cfg.Streaming.Mode == "segment" {
-		a.hideCompletionOverlay()
-		return
-	}
 	a.showCompletionSuccess(text)
 }
 
@@ -500,21 +496,10 @@ func (a *App) handleDictationEvent(
 		if text == "" {
 			return nil
 		}
-		if a.hotkey != nil {
-			a.hotkey.Lock()
-		}
-		err := a.injector.InsertLive(ctx, state.target, event.Text)
-		if a.hotkey != nil {
-			a.hotkey.Unlock()
-		}
-		if err != nil {
-			return err
-		}
+		state.liveText += event.Text
 		a.overlay.AnimateChunk(event.Text)
-		if a.cfg.Streaming.ShowPartialOverlay {
-			a.overlay.SetListeningText(state.target.WindowClass, event.Text)
-		}
-		sessionlog.Infof("stream segment inserted into window=%s", state.target.WindowID)
+		a.overlay.SetListeningText(state.target.WindowClass, state.liveText)
+		sessionlog.Infof("stream segment accumulated: %d chars total", len(state.liveText))
 		return nil
 	default:
 		return nil

@@ -39,72 +39,40 @@ func TestHandleDictationEventUpdatesOverlayWithPartialText(t *testing.T) {
 	}
 }
 
-func TestHandleDictationEventInsertsSegmentWhileHolding(t *testing.T) {
+func TestHandleDictationEventAccumulatesSegments(t *testing.T) {
 	t.Parallel()
 
-	fakeInjector := &injectorStub{}
 	fakeOverlay := &overlayStub{}
 	app := &App{
 		cfg: config.Config{
 			HotkeyMode: "hold",
 			Streaming:  config.StreamingConfig{Mode: "segment"},
 		},
-		overlay:  fakeOverlay,
-		injector: fakeInjector,
-		hotkey:   &hotkeyStub{},
+		overlay: fakeOverlay,
 	}
 	state := &recordingState{
 		target: injector.Target{WindowID: "42", WindowClass: "Gedit"},
 	}
 	app.recording = state
 
-	err := app.handleDictationEvent(context.Background(), state, openai.DictationEvent{
-		Type: openai.DictationEventSegment,
-		Text: "segment one",
-	})
-	if err != nil {
-		t.Fatalf("handleDictationEvent: %v", err)
+	for _, seg := range []string{"segment one", " segment two"} {
+		err := app.handleDictationEvent(context.Background(), state, openai.DictationEvent{
+			Type: openai.DictationEventSegment,
+			Text: seg,
+		})
+		if err != nil {
+			t.Fatalf("handleDictationEvent: %v", err)
+		}
 	}
 
-	if len(fakeInjector.liveInserted) != 1 || fakeInjector.liveInserted[0] != "segment one" {
-		t.Fatalf("liveInserted = %v, want [segment one]", fakeInjector.liveInserted)
+	if state.liveText != "segment one segment two" {
+		t.Fatalf("liveText = %q, want %q", state.liveText, "segment one segment two")
 	}
-	if len(fakeOverlay.animatedChunks) != 1 || fakeOverlay.animatedChunks[0] != "segment one" {
-		t.Fatalf("animatedChunks = %v, want [segment one]", fakeOverlay.animatedChunks)
+	if len(fakeOverlay.animatedChunks) != 2 {
+		t.Fatalf("animatedChunks = %v, want 2 entries", fakeOverlay.animatedChunks)
 	}
-	hk := app.hotkey.(*hotkeyStub)
-	if hk.lockCount != 1 || hk.unlockCount != 1 {
-		t.Fatalf("lock/unlock = %d/%d, want 1/1", hk.lockCount, hk.unlockCount)
-	}
-}
-
-func TestHandleDictationEventPreservesFormattedSegmentText(t *testing.T) {
-	t.Parallel()
-
-	fakeInjector := &injectorStub{}
-	app := &App{
-		cfg: config.Config{
-			HotkeyMode: "hold",
-			Streaming:  config.StreamingConfig{Mode: "segment"},
-		},
-		overlay:  &overlayStub{},
-		injector: fakeInjector,
-	}
-	state := &recordingState{
-		target: injector.Target{WindowID: "42", WindowClass: "Gedit"},
-	}
-	app.recording = state
-
-	err := app.handleDictationEvent(context.Background(), state, openai.DictationEvent{
-		Type: openai.DictationEventSegment,
-		Text: " second chunk",
-	})
-	if err != nil {
-		t.Fatalf("handleDictationEvent: %v", err)
-	}
-
-	if len(fakeInjector.liveInserted) != 1 || fakeInjector.liveInserted[0] != " second chunk" {
-		t.Fatalf("liveInserted = %v, want [ second chunk]", fakeInjector.liveInserted)
+	if fakeOverlay.listeningText != "segment one segment two" {
+		t.Fatalf("listeningText = %q, want accumulated text", fakeOverlay.listeningText)
 	}
 }
 
@@ -226,10 +194,3 @@ func (i *injectorStub) InsertLive(_ context.Context, _ injector.Target, text str
 	return nil
 }
 
-type hotkeyStub struct {
-	lockCount   int
-	unlockCount int
-}
-
-func (h *hotkeyStub) Lock()   { h.lockCount++ }
-func (h *hotkeyStub) Unlock() { h.unlockCount++ }
