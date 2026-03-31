@@ -51,7 +51,6 @@ func TestHandleDictationEventInsertsSegmentWhileHolding(t *testing.T) {
 		},
 		overlay:  fakeOverlay,
 		injector: fakeInjector,
-		hotkey:   &hotkeyStub{},
 	}
 	state := &recordingState{
 		target: injector.Target{WindowID: "42", WindowClass: "Gedit"},
@@ -71,10 +70,6 @@ func TestHandleDictationEventInsertsSegmentWhileHolding(t *testing.T) {
 	}
 	if len(fakeOverlay.animatedChunks) != 1 || fakeOverlay.animatedChunks[0] != "segment one" {
 		t.Fatalf("animatedChunks = %v, want [segment one]", fakeOverlay.animatedChunks)
-	}
-	hk := app.hotkey.(*hotkeyStub)
-	if hk.lockCount != 1 || hk.unlockCount != 1 {
-		t.Fatalf("lock/unlock = %d/%d, want 1/1", hk.lockCount, hk.unlockCount)
 	}
 }
 
@@ -226,10 +221,3 @@ func (i *injectorStub) InsertLive(_ context.Context, _ injector.Target, text str
 	return nil
 }
 
-type hotkeyStub struct {
-	lockCount   int
-	unlockCount int
-}
-
-func (h *hotkeyStub) Lock()   { h.lockCount++ }
-func (h *hotkeyStub) Unlock() { h.unlockCount++ }

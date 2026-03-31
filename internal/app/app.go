@@ -21,7 +21,6 @@ import (
 type App struct {
 	cfg        config.Config
 	overlay    overlayUI
-	hotkey     hotkeyController
 	recorder   *recorder.Recorder
 	injector   injectorClient
 	transcribe *openai.Client
@@ -63,11 +62,6 @@ type injectorClient interface {
 	InsertLive(ctx context.Context, target injector.Target, text string) error
 }
 
-type hotkeyController interface {
-	Lock()
-	Unlock()
-}
-
 const minToggleInterval = 250 * time.Millisecond
 
 func New(cfg config.Config) *App {
@@ -104,7 +98,6 @@ func (a *App) Run(ctx context.Context) error {
 		return err
 	}
 	defer hk.Close()
-	a.hotkey = hk
 
 	a.overlay.ShowHint(a.hotkeyHint(hk.Shortcut()))
 
@@ -500,14 +493,7 @@ func (a *App) handleDictationEvent(
 		if text == "" {
 			return nil
 		}
-		if a.hotkey != nil {
-			a.hotkey.Lock()
-		}
-		err := a.injector.InsertLive(ctx, state.target, event.Text)
-		if a.hotkey != nil {
-			a.hotkey.Unlock()
-		}
-		if err != nil {
+		if err := a.injector.InsertLive(ctx, state.target, event.Text); err != nil {
 			return err
 		}
 		a.overlay.AnimateChunk(event.Text)
