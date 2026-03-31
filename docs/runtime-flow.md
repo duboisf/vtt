@@ -63,6 +63,32 @@ When `streaming.mode = "segment"`:
 
 Segments are never typed into the target window during recording. This avoids corrupting the X11 keymap state with `xdotool keyup` while the user is still holding the hotkey.
 
+## Overlay Animations
+
+The overlay uses three animation modes for transitions:
+
+- **First appearance** (e.g., hotkey pressed when overlay is hidden): slides down 28px while fading in over 320ms. Opacity ramps linearly; slide position uses ease-out cubic. If a state change arrives mid-slide (e.g., `ShowListening` updating the window class), the content updates without interrupting the slide.
+- **State transitions** (e.g., Listening → Finishing): true pixel-level crossfade over 80ms. The previous frame is captured, the new state is applied, and the two frames are alpha-blended in software.
+- **Final hide** (auto-hide timer or manual dismiss): slides up 28px while fading out over 320ms with ease-in cubic for the slide.
+
+## Tracing
+
+When telemetry is enabled, the following OpenTelemetry spans are emitted per dictation session:
+
+- `vtt.dictation` — root span covering the full session lifecycle
+  - `vtt.recorder.start` — PulseAudio client init and stream creation
+  - `vtt.openai.connect` — WebSocket dial and realtime session setup
+  - `vtt.recorder.stop` — stream stop and resource cleanup
+  - `vtt.transcribe.finalize` — post-recording finalization
+    - `vtt.transcribe.drain` — drain pending segment finals (250ms window)
+    - `vtt.transcribe.commit` — commit trailing audio buffer to OpenAI
+    - `vtt.transcribe.wait_final` — wait for OpenAI to return the trailing transcript
+  - `vtt.inject` — text insertion into the target window
+    - `vtt.inject.focus` — window activate and modifier key release
+    - `vtt.inject.paste` or `vtt.inject.type` — clipboard paste or xdotool type
+
+`vtt.inject.capture_target` runs before the dictation span to identify the active window.
+
 ## Short Recordings
 
 Very short recordings are treated as a silent cancel:
