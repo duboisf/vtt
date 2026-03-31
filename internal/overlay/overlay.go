@@ -189,7 +189,7 @@ func (o *Overlay) AnimateChunk(text string) {
 	go o.animateChunk(token, shorten(text, o.bodyTextLimit()))
 }
 
-func (o *Overlay) ShowFinishing(body, shortcut string) {
+func (o *Overlay) ShowFinishing(body, shortcut string, timeout time.Duration) {
 	var suffix string
 	if shortcut != "" {
 		suffix = fmt.Sprintf(" — press %s to cancel", shortcut)
@@ -197,11 +197,47 @@ func (o *Overlay) ShowFinishing(body, shortcut string) {
 	o.show(viewState{
 		title:         "Finishing",
 		titleSuffix:   suffix,
-		subtitle:      "Wrapping up the last few words...",
+		subtitle:      finishingSubtitle(timeout),
 		body:          body,
 		accent:        color.RGBA{R: 96, G: 165, B: 250, A: 255},
 		heartbeatWave: true,
 	}, false)
+	if timeout > 0 {
+		o.mu.Lock()
+		token := o.animToken
+		o.mu.Unlock()
+		go o.animateCountdown(token, timeout)
+	}
+}
+
+func finishingSubtitle(remaining time.Duration) string {
+	secs := int(remaining.Seconds())
+	if secs <= 0 {
+		return "Wrapping up the last few words..."
+	}
+	return fmt.Sprintf("Wrapping up the last few words... (%ds)", secs)
+}
+
+func (o *Overlay) animateCountdown(token uint64, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		o.mu.Lock()
+		if token != o.animToken || !o.visible || o.state.title != "Finishing" {
+			o.mu.Unlock()
+			return
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			o.mu.Unlock()
+			return
+		}
+		o.state.subtitle = finishingSubtitle(remaining)
+		o.drawLocked()
+		o.mu.Unlock()
+	}
 }
 
 func (o *Overlay) ShowSuccess(text string) {
@@ -287,6 +323,7 @@ func (o *Overlay) show(state viewState, autoHide bool) {
 		return
 	}
 
+	o.repositionLocked()
 	o.applyStateLocked(state)
 	o.fadeAlpha = 0
 	o.fadeOffset = fadeSlideDistance
@@ -869,6 +906,12 @@ func displayedListeningText(body string) string {
 		return ""
 	}
 	return text
+}
+
+func (o *Overlay) repositionLocked() {
+	x, y := position(o.x, o.cfg)
+	o.baseX = x
+	o.baseY = y
 }
 
 func position(xu *xgbutil.XUtil, cfg config.OverlayConfig) (int, int) {

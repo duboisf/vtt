@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"testing"
+	"time"
 
 	"vocis/internal/config"
 	"vocis/internal/injector"
@@ -204,7 +205,7 @@ func (o *overlayStub) ShowListening(string, string) {}
 func (o *overlayStub) AnimateChunk(text string) {
 	o.animatedChunks = append(o.animatedChunks, text)
 }
-func (o *overlayStub) ShowFinishing(string, string) {}
+func (o *overlayStub) ShowFinishing(string, string, time.Duration) {}
 func (o *overlayStub) ShowSuccess(text string) {
 	o.successText = text
 }

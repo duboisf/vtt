@@ -58,7 +58,7 @@ type overlayUI interface {
 	ShowListening(windowClass, hotkeyMode string)
 	SetListeningText(windowClass, text string)
 	AnimateChunk(text string)
-	ShowFinishing(body, shortcut string)
+	ShowFinishing(body, shortcut string, timeout time.Duration)
 	ShowSuccess(text string)
 	ShowError(err error)
 	SetLevel(level float64)
@@ -263,7 +263,7 @@ func (a *App) stopRecordingLocked(ctx context.Context) {
 	state := a.recording
 	a.recording = nil
 	a.transcribing = true
-	a.overlay.ShowFinishing(state.displayText, a.shortcut)
+	a.overlay.ShowFinishing(state.displayText, a.shortcut, a.estimateFinishTimeout(state))
 	sessionlog.Infof("stopping recording and finalizing transcription after %s",
 		time.Since(state.startedAt).Round(10*time.Millisecond))
 
@@ -323,7 +323,7 @@ func (a *App) forceStopAfter(ctx context.Context, id uint64, maxDuration time.Du
 	a.transcribing = true
 	a.mu.Unlock()
 
-	a.overlay.ShowFinishing(state.displayText, a.shortcut)
+	a.overlay.ShowFinishing(state.displayText, a.shortcut, a.estimateFinishTimeout(state))
 	sessionlog.Warnf("auto-stopping recording after timeout")
 	go a.finishRecording(ctx, state)
 }
@@ -453,6 +453,18 @@ func (a *App) monitorRecordingLevel(ctx context.Context, id uint64, session *rec
 
 		a.overlay.SetLevel(session.Level())
 	}
+}
+
+func (a *App) estimateFinishTimeout(state *recordingState) time.Duration {
+	estimate := state.session.Duration() / 5
+	if estimate < 5*time.Second {
+		estimate = 5 * time.Second
+	}
+	cap := time.Duration(a.cfg.OpenAI.RequestLimit) * time.Second
+	if estimate > cap {
+		estimate = cap
+	}
+	return estimate
 }
 
 func (a *App) hotkeyHint(shortcut string) string {
