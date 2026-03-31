@@ -228,6 +228,8 @@ func (o *Overlay) animateCountdown(timeout time.Duration) {
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
+			o.state.subtitle = "Timed out waiting for transcription"
+			o.drawLocked()
 			o.mu.Unlock()
 			return
 		}

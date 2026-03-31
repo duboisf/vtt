@@ -230,7 +230,10 @@ func (c *Client) StartStream(ctx context.Context, sampleRate, channels int) (*St
 		return nil, errors.New("recording.channels must be greater than zero")
 	}
 
-	ctx, connectSpan := telemetry.StartSpan(ctx, "vocis.openai.connect",
+	connectCtx, connectCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer connectCancel()
+
+	ctx, connectSpan := telemetry.StartSpan(connectCtx, "vocis.openai.connect",
 		attribute.String("openai.model", c.cfg.Model),
 		attribute.Int("audio.sample_rate", sampleRate),
 		attribute.Int("audio.channels", channels),

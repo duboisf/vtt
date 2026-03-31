@@ -264,7 +264,7 @@ func (a *App) stopRecordingLocked(ctx context.Context) {
 	a.recording = nil
 	a.transcribing = true
 	a.overlay.ShowFinishing(state.displayText, a.shortcut, a.estimateFinishTimeout(state))
-	sessionlog.Infof("stopping recording and finalizing transcription after %s",
+	sessionlog.Infof("stopping recording duration=%s",
 		time.Since(state.startedAt).Round(10*time.Millisecond))
 
 	go a.finishRecording(ctx, state)
@@ -345,7 +345,7 @@ func (a *App) finishRecording(ctx context.Context, state *recordingState) {
 	if err := state.session.Stop(stopCtx); err != nil {
 		if errors.Is(err, recorder.ErrRecordingTooShort) {
 			state.span.SetAttributes(attribute.Bool("recording.discarded", true))
-			sessionlog.Infof("discarding short recording after %s",
+			sessionlog.Infof("discarding short recording duration=%s",
 				state.session.Duration().Round(10*time.Millisecond))
 			state.cancel()
 			a.hideCompletionOverlay()
@@ -361,12 +361,15 @@ func (a *App) finishRecording(ctx context.Context, state *recordingState) {
 		attribute.Int64("recording.bytes", state.session.BytesCaptured()),
 		attribute.String("recording.duration", state.session.Duration().Round(10*time.Millisecond).String()),
 	)
-	sessionlog.Infof("audio captured successfully: %d bytes streamed over %s",
+	sessionlog.Infof("audio captured bytes=%d duration=%s",
 		state.session.BytesCaptured(), state.session.Duration().Round(10*time.Millisecond))
 
+	finishTimeout := a.estimateFinishTimeout(state)
+	sessionlog.Infof("finalizing recording=%s timeout=%s",
+		state.session.Duration().Round(10*time.Millisecond), finishTimeout.Round(100*time.Millisecond))
 	transcribeCtx, transcribeCancel := context.WithTimeout(
 		spanCtx,
-		time.Duration(a.cfg.OpenAI.RequestLimit)*time.Second,
+		finishTimeout,
 	)
 	defer transcribeCancel()
 
@@ -379,18 +382,21 @@ func (a *App) finishRecording(ctx context.Context, state *recordingState) {
 		a.mu.Unlock()
 	}()
 
+	finalizeStart := time.Now()
 	transcribeCtx, transcribeSpan := telemetry.StartSpan(transcribeCtx, "vocis.transcribe.finalize")
 	result, err := state.dictation.Finalize(transcribeCtx)
+	finalizeDuration := time.Since(finalizeStart).Round(10 * time.Millisecond)
 	telemetry.EndSpan(transcribeSpan, err)
 	if err != nil {
 		if a.completionOverlayDismissed() {
-			sessionlog.Infof("transcription cancelled by user")
+			sessionlog.Infof("transcription cancelled by user elapsed=%s error=%v", finalizeDuration, err)
 			return
 		}
-		sessionlog.Errorf("transcribe audio: %v", err)
+		sessionlog.Errorf("transcribe failed elapsed=%s error=%v", finalizeDuration, err)
 		a.showCompletionError(err)
 		return
 	}
+	sessionlog.Infof("finalization completed elapsed=%s", finalizeDuration)
 	trailing := strings.TrimSpace(result.Text)
 
 	text := state.liveText
@@ -407,7 +413,7 @@ func (a *App) finishRecording(ctx context.Context, state *recordingState) {
 		attribute.Int("transcription.live_chars", len(state.liveText)),
 		attribute.Int("transcription.trailing_chars", len(trailing)),
 	)
-	sessionlog.Infof("transcription complete: %d characters (%d live + %d trailing)",
+	sessionlog.Infof("transcription complete chars=%d live=%d trailing=%d",
 		len(text), len(state.liveText), len(trailing))
 
 	if text == "" {
