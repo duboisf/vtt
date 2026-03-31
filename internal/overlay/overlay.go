@@ -449,6 +449,7 @@ func (o *Overlay) drawLocked() {
 	draw.Draw(img, img.Bounds(), &image.Uniform{C: bg}, image.Point{}, draw.Src)
 
 	drawRect(img, image.Rect(0, 0, img.Bounds().Dx(), 6), o.state.accent)
+	writeText(img, 20, 18, "Vocis", color.RGBA{R: 55, G: 65, B: 81, A: 255}, o.smallFace)
 	drawRect(img, image.Rect(20, 22, 20+96, 24), color.RGBA{R: 24, G: 38, B: 65, A: 255})
 	drawBars(
 		img,
@@ -611,6 +612,7 @@ func (o *Overlay) captureFrameLocked() *image.RGBA {
 	draw.Draw(img, img.Bounds(), &image.Uniform{C: bg}, image.Point{}, draw.Src)
 
 	drawRect(img, image.Rect(0, 0, img.Bounds().Dx(), 6), o.state.accent)
+	writeText(img, 20, 18, "Vocis", color.RGBA{R: 55, G: 65, B: 81, A: 255}, o.smallFace)
 	drawRect(img, image.Rect(20, 22, 20+96, 24), color.RGBA{R: 24, G: 38, B: 65, A: 255})
 	drawBars(img, image.Rect(26, 42, 132, 98), o.state.accent, o.level,
 		o.state.reactiveWave, o.state.idleWave, o.wavePhase)
