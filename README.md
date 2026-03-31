@@ -22,7 +22,7 @@ It was very much vibe-coded from scratch to... scratch an itch.
 - XDG config file at `~/.config/vocis/config.json`
 - OpenAI API keys stored in the system keyring by default
 - Focus restore and paste back into the app that was active when recording
-- Segmented streaming mode: live transcription appears in the overlay as you speak, pasted once on release
+- Live segmented transcription appears in the overlay as you speak, pasted once on release
 - Terminal-aware paste key support
 - Overlay with system monospace font, smooth vertical resize, and segment-per-line display
 
@@ -76,11 +76,10 @@ Important fields:
 - `openai.prompt_hint`: optional terminology and style hint for transcription
 - `recording.backend`: currently `auto` or `pulse`
 - `recording.device`: PulseAudio source name, or `default`
-- `streaming.mode`: `release` or `segment`
 - `streaming.show_partial_overlay`: show live partial text in the overlay while speaking
-- `streaming.silence_duration_ms`: pause length that ends a segment in `segment` mode
-- `streaming.prefix_padding_ms`: audio kept ahead of each detected phrase in `segment` mode
-- `streaming.threshold`: VAD sensitivity from `0.0` to `1.0` in `segment` mode
+- `streaming.silence_duration_ms`: pause length that ends a segment
+- `streaming.prefix_padding_ms`: audio kept ahead of each detected phrase
+- `streaming.threshold`: VAD sensitivity from `0.0` to `1.0`
 - `insertion.mode`: `auto`, `clipboard`, or `type`
 
 ## Secrets

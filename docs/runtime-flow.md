@@ -53,9 +53,9 @@ After transcription completes:
 
 ## Segmented Streaming
 
-When `streaming.mode = "segment"`:
+Server VAD is always enabled. While the hotkey is held:
 
-1. OpenAI server VAD detects pauses while the hotkey is still held.
+1. OpenAI server VAD detects pauses.
 2. Completed phrases are emitted as segment events from the dictation session.
 3. [`internal/app/app.go`](/home/fred/git/vtt/internal/app/app.go) accumulates segment text in `recordingState.liveText` (for pasting) and `recordingState.displayText` (for the overlay, with newlines between segments).
 4. The overlay displays each segment on a separate line, growing vertically as text accumulates. Partial transcription text is prepended with the accumulated segments so previously completed text stays visible.

@@ -47,7 +47,6 @@ func TestPiperAudioToRealtimeSmoke(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.Recording.Device = sourceName
-	cfg.Streaming.Mode = "release"
 	cfg.OpenAI.RequestLimit = 60
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)

@@ -25,7 +25,6 @@
     "max_duration_seconds": 120
   },
   "streaming": {
-    "mode": "release",
     "show_partial_overlay": true,
     "prefix_padding_ms": 300,
     "silence_duration_ms": 500,

@@ -38,7 +38,7 @@ func TestStartStreamAppendsPCMAndReturnsTranscript(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatalf("decode client secret request: %v", err)
 			}
-			assertClientSecretRequest(t, body, defaultProgrammerPrompt, false)
+			assertClientSecretRequest(t, body, defaultProgrammerPrompt, true)
 
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{
@@ -70,7 +70,7 @@ func TestStartStreamAppendsPCMAndReturnsTranscript(t *testing.T) {
 			if err := conn.ReadJSON(&sessionUpdate); err != nil {
 				t.Fatalf("read session update: %v", err)
 			}
-			assertSessionUpdate(t, sessionUpdate, defaultProgrammerPrompt, false)
+			assertSessionUpdate(t, sessionUpdate, defaultProgrammerPrompt, true)
 
 			_ = conn.WriteJSON(map[string]any{"type": "session.updated"})
 
@@ -191,7 +191,7 @@ func TestStartStreamUsesPromptHintWhenConfigured(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatalf("decode client secret request: %v", err)
 			}
-			assertClientSecretRequest(t, body, "Use technical spelling.", false)
+			assertClientSecretRequest(t, body, "Use technical spelling.", true)
 
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{
@@ -219,7 +219,7 @@ func TestStartStreamUsesPromptHintWhenConfigured(t *testing.T) {
 			if err := conn.ReadJSON(&sessionUpdate); err != nil {
 				t.Fatalf("read session update: %v", err)
 			}
-			assertSessionUpdate(t, sessionUpdate, "Use technical spelling.", false)
+			assertSessionUpdate(t, sessionUpdate, "Use technical spelling.", true)
 
 			_ = conn.WriteJSON(map[string]any{"type": "session.updated"})
 		default:
@@ -360,7 +360,6 @@ func TestShouldIgnoreMissingTrailingFinal(t *testing.T) {
 	t.Parallel()
 
 	session := &DictationSession{
-		streamingMode: "segment",
 		segmentCount:  1,
 	}
 	stream := &Stream{}
@@ -374,7 +373,6 @@ func TestShouldNotIgnoreMissingTrailingFinalWithoutSegments(t *testing.T) {
 	t.Parallel()
 
 	session := &DictationSession{
-		streamingMode: "segment",
 	}
 	stream := &Stream{}
 
@@ -437,7 +435,6 @@ func TestDictationSessionHandleStreamEventEmitsLiveSegment(t *testing.T) {
 	t.Parallel()
 
 	session := &DictationSession{
-		streamingMode: "segment",
 		liveSegments:  true,
 		events:        make(chan DictationEvent, 1),
 		finals:        make(chan finalResult, 1),
@@ -474,7 +471,6 @@ func TestDictationSessionHandleStreamEventQueuesFinalAfterLiveDisabled(t *testin
 	t.Parallel()
 
 	session := &DictationSession{
-		streamingMode: "segment",
 		liveSegments:  false,
 		events:        make(chan DictationEvent, 1),
 		finals:        make(chan finalResult, 1),
@@ -587,7 +583,6 @@ func TestStartStreamEnablesServerVADForSegmentMode(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.OpenAI.BaseURL = server.URL
-	cfg.Streaming.Mode = "segment"
 
 	client := New("test-key", cfg.OpenAI, cfg.Streaming)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

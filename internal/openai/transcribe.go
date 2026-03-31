@@ -93,8 +93,7 @@ type Stream struct {
 }
 
 type DictationSession struct {
-	streamingMode string
-	writeTimeout  time.Duration
+	writeTimeout time.Duration
 
 	events   chan DictationEvent
 	pumpDone chan error
@@ -213,12 +212,11 @@ func (c *Client) StartDictation(
 	}
 
 	session := &DictationSession{
-		streamingMode: c.streaming.Mode,
-		writeTimeout:  c.writeTimeout,
-		events:        make(chan DictationEvent, 16),
-		pumpDone:      make(chan error, 1),
-		finals:        make(chan finalResult, 8),
-		liveSegments:  c.streaming.Mode == "segment",
+		writeTimeout: c.writeTimeout,
+		events:       make(chan DictationEvent, 16),
+		pumpDone:     make(chan error, 1),
+		finals:       make(chan finalResult, 8),
+		liveSegments: true,
 	}
 	go session.run(ctx, c, sampleRate, channels, samples)
 	return session, nil
@@ -483,7 +481,7 @@ func (s *DictationSession) handleStreamEvent(event StreamEvent) error {
 		s.clearPendingFinalCommit()
 		s.markSegmentReceived()
 		text = s.formatSegmentText(text)
-		if s.streamingMode == "segment" && s.liveSegmentsEnabled() {
+		if s.liveSegmentsEnabled() {
 			s.emitEvent(DictationEvent{Type: DictationEventSegment, Text: text})
 			return nil
 		}
@@ -521,10 +519,6 @@ func (s *DictationSession) pushFinal(text string, err error) {
 }
 
 func (s *DictationSession) drainTrailingText(ctx context.Context, stream *Stream) (string, error) {
-	if s.streamingMode != "segment" {
-		return "", nil
-	}
-
 	timer := time.NewTimer(250 * time.Millisecond)
 	defer timer.Stop()
 
@@ -558,15 +552,13 @@ func (s *DictationSession) drainTrailingText(ctx context.Context, stream *Stream
 }
 
 func (s *DictationSession) waitForFinalText(ctx context.Context) (string, error) {
-	if s.streamingMode == "segment" {
-		timeout := s.trailingDuration() / 5
-		if timeout < 3*time.Second {
-			timeout = 3 * time.Second
-		}
-		waitCtx, cancel := context.WithTimeout(ctx, timeout)
-		defer cancel()
-		ctx = waitCtx
+	timeout := s.trailingDuration() / 5
+	if timeout < 3*time.Second {
+		timeout = 3 * time.Second
 	}
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	ctx = waitCtx
 	for {
 		select {
 		case <-ctx.Done():
@@ -581,7 +573,7 @@ func (s *DictationSession) waitForFinalText(ctx context.Context) (string, error)
 }
 
 func (s *DictationSession) shouldIgnoreEmptyCommit(err error, stream *Stream) bool {
-	if err == nil || s.streamingMode != "segment" {
+	if err == nil {
 		return false
 	}
 	if !errors.Is(err, ErrInputAudioBufferCommitEmpty) {
@@ -594,7 +586,7 @@ func (s *DictationSession) shouldIgnoreEmptyCommit(err error, stream *Stream) bo
 }
 
 func (s *DictationSession) shouldIgnoreMissingTrailingFinal(err error, stream *Stream) bool {
-	if err == nil || s.streamingMode != "segment" {
+	if err == nil {
 		return false
 	}
 	if !errors.Is(err, context.DeadlineExceeded) {
@@ -1161,10 +1153,6 @@ func (c *Client) audioTranscriptionParam() realtime.AudioTranscriptionParam {
 }
 
 func (c *Client) turnDetectionPayload() any {
-	if c.streaming.Mode != "segment" {
-		return nil
-	}
-
 	return map[string]any{
 		"type":                "server_vad",
 		"prefix_padding_ms":   c.streaming.PrefixPaddingMS,
@@ -1174,10 +1162,6 @@ func (c *Client) turnDetectionPayload() any {
 }
 
 func (c *Client) turnDetectionParam() *realtime.RealtimeTranscriptionSessionAudioInputTurnDetectionUnionParam {
-	if c.streaming.Mode != "segment" {
-		return nil
-	}
-
 	return &realtime.RealtimeTranscriptionSessionAudioInputTurnDetectionUnionParam{
 		OfServerVad: &realtime.RealtimeTranscriptionSessionAudioInputTurnDetectionServerVadParam{
 			Type:              "server_vad",

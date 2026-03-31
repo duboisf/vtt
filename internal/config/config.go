@@ -48,7 +48,6 @@ type RecordingConfig struct {
 }
 
 type StreamingConfig struct {
-	Mode               string  `json:"mode"`
 	ShowPartialOverlay bool    `json:"show_partial_overlay"`
 	PrefixPaddingMS    int     `json:"prefix_padding_ms"`
 	SilenceDurationMS  int     `json:"silence_duration_ms"`
@@ -94,7 +93,6 @@ func Default() Config {
 			MaxDurationSeconds: 120,
 		},
 		Streaming: StreamingConfig{
-			Mode:               "release",
 			ShowPartialOverlay: true,
 			PrefixPaddingMS:    300,
 			SilenceDurationMS:  500,
@@ -240,12 +238,6 @@ func (c Config) Validate() error {
 	case "", "auto", "pulse":
 	default:
 		return fmt.Errorf("recording.backend must be auto or pulse")
-	}
-
-	switch c.Streaming.Mode {
-	case "", "release", "segment":
-	default:
-		return fmt.Errorf("streaming.mode must be release or segment")
 	}
 
 	if c.Streaming.PrefixPaddingMS < 0 || c.Streaming.PrefixPaddingMS > 2000 {

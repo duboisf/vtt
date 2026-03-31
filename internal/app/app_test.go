@@ -101,7 +101,7 @@ func TestHandleDictationEventAccumulatesSegments(t *testing.T) {
 	app := &App{
 		cfg: config.Config{
 			HotkeyMode: "hold",
-			Streaming:  config.StreamingConfig{Mode: "segment"},
+			Streaming:  config.StreamingConfig{},
 		},
 		overlay: fakeOverlay,
 	}
@@ -135,8 +135,7 @@ func TestHandleUpDoesNothingWhenNotRecording(t *testing.T) {
 		cfg: config.Config{
 			HotkeyMode: "hold",
 			Streaming: config.StreamingConfig{
-				Mode: "segment",
-			},
+				},
 		},
 		overlay: &overlayStub{},
 	}
