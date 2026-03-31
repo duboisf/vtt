@@ -422,6 +422,10 @@ func (a *App) finishRecording(ctx context.Context, state *recordingState) {
 		return
 	}
 
+	if a.cfg.PostProcess.Enabled {
+		text = a.transcribe.PostProcess(spanCtx, a.cfg.PostProcess, text)
+	}
+
 	insertCtx, insertSpan := telemetry.StartSpan(spanCtx, "vocis.inject",
 		attribute.String("target.window_id", state.target.WindowID),
 		attribute.String("target.window_class", state.target.WindowClass),

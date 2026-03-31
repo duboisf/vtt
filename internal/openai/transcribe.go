@@ -159,10 +159,6 @@ type pcmEncoder struct {
 	accum     int64
 }
 
-const defaultProgrammerPrompt = "Transcribe for a programmer speaking naturally. " +
-	"Prefer common software, terminal, API, Git, and GitHub terminology. Preserve " +
-	"obvious technical terms, acronyms, and capitalization when the audio supports " +
-	"them. Do not invent extra words that were not spoken."
 
 func New(apiKey string, cfg config.OpenAIConfig, streaming config.StreamingConfig) *Client {
 	timeout := time.Duration(cfg.RequestLimit) * time.Second
@@ -955,10 +951,7 @@ func (c *Client) sessionUpdateEvent() map[string]any {
 }
 
 func (c *Client) prompt() string {
-	if hint := strings.TrimSpace(c.cfg.PromptHint); hint != "" {
-		return hint
-	}
-	return defaultProgrammerPrompt
+	return strings.TrimSpace(c.cfg.PromptHint)
 }
 
 func newPCMEncoder(sampleRate, channels int) *pcmEncoder {

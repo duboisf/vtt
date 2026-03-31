@@ -38,7 +38,8 @@ func run(args []string) int {
 		}
 		return 0
 	case "init":
-		if err := runInit(); err != nil {
+		force := len(args) > 1 && args[1] == "--force"
+		if err := runInit(force); err != nil {
 			sessionlog.Errorf("init: %v", err)
 			return 1
 		}
@@ -97,7 +98,19 @@ func runServe() error {
 	return app.New(cfg).Run(ctx)
 }
 
-func runInit() error {
+func runInit(force bool) error {
+	if force {
+		path, err := config.Path()
+		if err != nil {
+			return err
+		}
+		if err := config.Save(path, config.Default()); err != nil {
+			return err
+		}
+		fmt.Printf("wrote %s (forced)\n", path)
+		return nil
+	}
+
 	path, err := config.InitDefault()
 	if err != nil {
 		return err
@@ -239,7 +252,7 @@ func printUsage() {
 
 Usage:
   vocis serve
-  vocis init
+  vocis init [--force]
   vocis doctor
   vocis key set
   vocis key clear

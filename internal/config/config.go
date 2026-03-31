@@ -11,16 +11,35 @@ import (
 
 const fileName = "config.json"
 
+const DefaultPostProcessPrompt = "Clean up this dictated text. " +
+	"Remove filler words (um, uh, like, you know, I mean, sort of, kind of), false starts, and repetitions. " +
+	"Fix grammar and punctuation. Produce fluent, natural sentences. " +
+	"Preserve the speaker's meaning, tone, and technical terminology exactly. " +
+	"Return only the cleaned text, nothing else."
+
+const DefaultPromptHint = "Transcribe naturally for a programmer. " +
+	"Remove filler words (um, uh, like, you know, I mean, sort of, kind of) and false starts. " +
+	"Clean up hesitations into fluent sentences while preserving the speaker's intent and meaning. " +
+	"Prefer technical terminology for software, CLI, cloud, and API concepts. " +
+	"Preserve obvious technical terms, acronyms, and capitalization when the audio supports them."
+
 type Config struct {
-	Hotkey         string          `json:"hotkey"`
-	HotkeyMode     string          `json:"hotkey_mode"`
-	LogWindowTitle bool            `json:"log_window_title"`
-	OpenAI         OpenAIConfig    `json:"openai"`
-	Recording      RecordingConfig `json:"recording"`
-	Streaming      StreamingConfig `json:"streaming"`
-	Insertion      InsertionConfig `json:"insertion"`
-	Overlay        OverlayConfig   `json:"overlay"`
-	Telemetry      TelemetryConfig `json:"telemetry"`
+	Hotkey         string            `json:"hotkey"`
+	HotkeyMode     string           `json:"hotkey_mode"`
+	LogWindowTitle bool             `json:"log_window_title"`
+	OpenAI         OpenAIConfig     `json:"openai"`
+	Recording      RecordingConfig  `json:"recording"`
+	Streaming      StreamingConfig  `json:"streaming"`
+	Insertion      InsertionConfig  `json:"insertion"`
+	Overlay        OverlayConfig    `json:"overlay"`
+	PostProcess    PostProcessConfig `json:"postprocess"`
+	Telemetry      TelemetryConfig  `json:"telemetry"`
+}
+
+type PostProcessConfig struct {
+	Enabled bool   `json:"enabled"`
+	Model   string `json:"model"`
+	Prompt  string `json:"prompt"`
 }
 
 type TelemetryConfig struct {
@@ -76,8 +95,9 @@ func Default() Config {
 		Hotkey:     "ctrl+shift+space",
 		HotkeyMode: "hold",
 		OpenAI: OpenAIConfig{
-			BaseURL:      "https://api.openai.com/v1",
-			Model:        "gpt-4o-mini-transcribe",
+			BaseURL:    "https://api.openai.com/v1",
+			Model:      "gpt-4o-mini-transcribe",
+			PromptHint: DefaultPromptHint,
 			RequestLimit: 45,
 			Vocabulary: []string{
 				"OpenAI",
@@ -122,6 +142,11 @@ func Default() Config {
 			MarginTop:      44,
 			Opacity:        0.94,
 			AutoHideMillis: 1800,
+		},
+		PostProcess: PostProcessConfig{
+			Enabled: true,
+			Model:   "gpt-4o-mini",
+			Prompt:  DefaultPostProcessPrompt,
 		},
 		Telemetry: TelemetryConfig{
 			Enabled:  false,

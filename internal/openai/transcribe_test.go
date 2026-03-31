@@ -38,7 +38,7 @@ func TestStartStreamAppendsPCMAndReturnsTranscript(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatalf("decode client secret request: %v", err)
 			}
-			assertClientSecretRequest(t, body, defaultProgrammerPrompt, true)
+			assertClientSecretRequest(t, body, config.DefaultPromptHint, true)
 
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{
@@ -70,7 +70,7 @@ func TestStartStreamAppendsPCMAndReturnsTranscript(t *testing.T) {
 			if err := conn.ReadJSON(&sessionUpdate); err != nil {
 				t.Fatalf("read session update: %v", err)
 			}
-			assertSessionUpdate(t, sessionUpdate, defaultProgrammerPrompt, true)
+			assertSessionUpdate(t, sessionUpdate, config.DefaultPromptHint, true)
 
 			_ = conn.WriteJSON(map[string]any{"type": "session.updated"})
 
@@ -546,7 +546,7 @@ func TestStartStreamEnablesServerVADForSegmentMode(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatalf("decode client secret request: %v", err)
 			}
-			assertClientSecretRequest(t, body, defaultProgrammerPrompt, true)
+			assertClientSecretRequest(t, body, config.DefaultPromptHint, true)
 
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{
@@ -574,7 +574,7 @@ func TestStartStreamEnablesServerVADForSegmentMode(t *testing.T) {
 			if err := conn.ReadJSON(&sessionUpdate); err != nil {
 				t.Fatalf("read session update: %v", err)
 			}
-			assertSessionUpdate(t, sessionUpdate, defaultProgrammerPrompt, true)
+			assertSessionUpdate(t, sessionUpdate, config.DefaultPromptHint, true)
 		default:
 			http.NotFound(w, r)
 		}
