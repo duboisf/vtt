@@ -11,8 +11,9 @@ At a high level:
 - early audio is buffered while the OpenAI realtime transcription session connects
 - buffered audio is flushed into the realtime session as soon as it is ready
 - audio is streamed to OpenAI after that
+- in segmented mode, completed phrases accumulate in the overlay as you speak (one line per segment)
 - on release or stop, the dictation session decides whether there is trailing audio left to commit
-- the final transcript is inserted back into the previously focused app
+- the accumulated text plus any trailing transcript is inserted back into the previously focused app as a single paste
 
 Important constraints:
 

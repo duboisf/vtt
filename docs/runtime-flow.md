@@ -34,11 +34,12 @@ Why this matters:
 When the hotkey stops dictation:
 
 1. [`internal/app/app.go`](/home/fred/git/vtt/internal/app/app.go) stops local recording.
-2. The overlay switches to transcribing.
+2. The overlay switches to the "Finishing" state, showing the accumulated text and "Wrapping up the last few words...".
 3. [`internal/openai/transcribe.go`](/home/fred/git/vtt/internal/openai/transcribe.go) finalizes the `DictationSession`.
 4. The dictation session decides whether there is any trailing audio left that still needs a final commit.
 5. If segmented mode already emitted the spoken chunks and there is no trailing audio left, finalization returns without forcing an extra commit.
 6. Otherwise the OpenAI stream is committed and the final transcription event is awaited.
+7. The accumulated segment text plus any trailing finalize text is combined and inserted as a single paste.
 
 ## Insert
 
@@ -55,10 +56,11 @@ When `streaming.mode = "segment"`:
 
 1. OpenAI server VAD detects pauses while the hotkey is still held.
 2. Completed phrases are emitted as segment events from the dictation session.
-3. [`internal/app/app.go`](/home/fred/git/vtt/internal/app/app.go) updates the overlay and asks [`internal/injector/injector.go`](/home/fred/git/vtt/internal/injector/injector.go) to type those completed phrases live.
-4. On release, finalization only flushes trailing speech that has not already been emitted as a completed segment.
+3. [`internal/app/app.go`](/home/fred/git/vtt/internal/app/app.go) accumulates segment text in `recordingState.liveText` (for pasting) and `recordingState.displayText` (for the overlay, with newlines between segments).
+4. The overlay displays each segment on a separate line, growing vertically as text accumulates. Partial transcription text is prepended with the accumulated segments so previously completed text stays visible.
+5. On release, the accumulated text plus any trailing finalize text is combined and pasted into the target window as a single insertion.
 
-This is why segmented mode should feel more live than release-only mode without waiting for the whole utterance to finish.
+Segments are never typed into the target window during recording. This avoids corrupting the X11 keymap state with `xdotool keyup` while the user is still holding the hotkey.
 
 ## Short Recordings
 

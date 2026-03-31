@@ -18,9 +18,9 @@ It was very much vibe-coded from scratch to... scratch an itch.
 - XDG config file at `~/.config/vtt/config.json`
 - OpenAI API keys stored in the system keyring by default
 - Focus restore and paste back into the app that was active when recording
-- Optional segmented streaming that can paste completed phrases on pauses
+- Segmented streaming mode: live transcription appears in the overlay as you speak, pasted once on release
 - Terminal-aware paste key support
-- Lightweight overlay for listening, transcribing, success, and errors
+- Overlay with system monospace font, smooth vertical resize, and segment-per-line display
 
 ## Dependencies
 
