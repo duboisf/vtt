@@ -29,9 +29,11 @@ type App struct {
 	mu                       sync.Mutex
 	recording                *recordingState
 	transcribing             bool
+	transcribeCancel         context.CancelFunc
 	dismissCompletionOverlay bool
 	lastToggle               time.Time
 	sequence                 uint64
+	shortcut                 string
 }
 
 type recordingState struct {
@@ -50,7 +52,7 @@ type overlayUI interface {
 	ShowListening(windowClass string)
 	SetListeningText(windowClass, text string)
 	AnimateChunk(text string)
-	ShowFinishing(body string)
+	ShowFinishing(body, shortcut string)
 	ShowSuccess(text string)
 	ShowError(err error)
 	SetLevel(level float64)
@@ -101,7 +103,8 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	defer hk.Close()
 
-	a.overlay.ShowHint(a.hotkeyHint(hk.Shortcut()))
+	a.shortcut = hk.Shortcut()
+	a.overlay.ShowHint(a.hotkeyHint(a.shortcut))
 
 	for {
 		select {
@@ -243,7 +246,7 @@ func (a *App) stopRecordingLocked(ctx context.Context) {
 	state := a.recording
 	a.recording = nil
 	a.transcribing = true
-	a.overlay.ShowFinishing(state.displayText)
+	a.overlay.ShowFinishing(state.displayText, a.shortcut)
 	sessionlog.Infof("stopping recording and finalizing transcription after %s",
 		time.Since(state.startedAt).Round(10*time.Millisecond))
 
@@ -303,7 +306,7 @@ func (a *App) forceStopAfter(ctx context.Context, id uint64, maxDuration time.Du
 	a.transcribing = true
 	a.mu.Unlock()
 
-	a.overlay.ShowFinishing(state.displayText)
+	a.overlay.ShowFinishing(state.displayText, a.shortcut)
 	sessionlog.Warnf("auto-stopping recording after timeout")
 	go a.finishRecording(ctx, state)
 }
@@ -341,8 +344,21 @@ func (a *App) finishRecording(ctx context.Context, state *recordingState) {
 	)
 	defer transcribeCancel()
 
+	a.mu.Lock()
+	a.transcribeCancel = transcribeCancel
+	a.mu.Unlock()
+	defer func() {
+		a.mu.Lock()
+		a.transcribeCancel = nil
+		a.mu.Unlock()
+	}()
+
 	result, err := state.dictation.Finalize(transcribeCtx)
 	if err != nil {
+		if a.completionOverlayDismissed() {
+			sessionlog.Infof("transcription cancelled by user")
+			return
+		}
 		sessionlog.Errorf("transcribe audio: %v", err)
 		a.showCompletionError(err)
 		return
@@ -415,16 +431,16 @@ func (a *App) dismissInFlightOverlay() bool {
 	}
 
 	a.dismissCompletionOverlay = true
+	if a.transcribeCancel != nil {
+		a.transcribeCancel()
+	}
 	a.overlay.Hide()
+	sessionlog.Infof("transcription cancelled by user")
 	return true
 }
 
 func (a *App) showCompletionSuccess(text string) {
-	if a.completionOverlayDismissed() {
-		a.overlay.Hide()
-		return
-	}
-	a.overlay.ShowSuccess(text)
+	a.overlay.Hide()
 }
 
 func (a *App) showCompletionError(err error) {

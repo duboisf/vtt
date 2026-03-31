@@ -205,7 +205,7 @@ func (o *overlayStub) ShowListening(string) {}
 func (o *overlayStub) AnimateChunk(text string) {
 	o.animatedChunks = append(o.animatedChunks, text)
 }
-func (o *overlayStub) ShowFinishing(string) {}
+func (o *overlayStub) ShowFinishing(string, string) {}
 func (o *overlayStub) ShowSuccess(text string) {
 	o.successText = text
 }

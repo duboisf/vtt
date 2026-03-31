@@ -102,6 +102,8 @@ type DictationSession struct {
 	liveSegments       bool
 	pendingFinalCommit bool
 	segmentCount       int
+	streamReadyAt      time.Time
+	lastSegmentAt      time.Time
 }
 
 type finalResult struct {
@@ -455,6 +457,7 @@ func (s *DictationSession) handleStreamEvent(event StreamEvent) error {
 			return nil
 		}
 		s.clearPendingFinalCommit()
+		s.markSegmentReceived()
 		text = s.formatSegmentText(text)
 		if s.streamingMode == "segment" && s.liveSegmentsEnabled() {
 			s.emitEvent(DictationEvent{Type: DictationEventSegment, Text: text})
@@ -532,7 +535,11 @@ func (s *DictationSession) drainTrailingText(ctx context.Context, stream *Stream
 
 func (s *DictationSession) waitForFinalText(ctx context.Context) (string, error) {
 	if s.streamingMode == "segment" {
-		waitCtx, cancel := context.WithTimeout(ctx, minDuration(1500*time.Millisecond, s.writeTimeout))
+		timeout := s.trailingDuration() / 5
+		if timeout < 3*time.Second {
+			timeout = 3 * time.Second
+		}
+		waitCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 		ctx = waitCtx
 	}
@@ -585,6 +592,7 @@ func (s *DictationSession) setStream(stream *Stream) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.stream = stream
+	s.streamReadyAt = time.Now()
 }
 
 func (s *DictationSession) closeStream() {
@@ -639,6 +647,25 @@ func (s *DictationSession) segmentCountValue() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.segmentCount
+}
+
+func (s *DictationSession) markSegmentReceived() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastSegmentAt = time.Now()
+}
+
+func (s *DictationSession) trailingDuration() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ref := s.lastSegmentAt
+	if ref.IsZero() {
+		ref = s.streamReadyAt
+	}
+	if ref.IsZero() {
+		return 0
+	}
+	return time.Since(ref)
 }
 
 func (s *DictationSession) formatSegmentText(text string) string {

@@ -168,12 +168,20 @@ func (o *Overlay) AnimateChunk(text string) {
 	go o.animateChunk(token, shorten(text, o.bodyTextLimit()))
 }
 
-func (o *Overlay) ShowFinishing(body string) {
+func (o *Overlay) ShowFinishing(body, shortcut string) {
+	if shortcut != "" {
+		hint := fmt.Sprintf("Press %s to cancel", shortcut)
+		if body != "" {
+			body += "\n" + hint
+		} else {
+			body = hint
+		}
+	}
 	o.show(viewState{
 		title:    "Finishing",
 		subtitle: "Wrapping up the last few words...",
 		body:     body,
-		accent:   color.RGBA{R: 245, G: 158, B: 11, A: 255},
+		accent:   color.RGBA{R: 96, G: 165, B: 250, A: 255},
 	}, false)
 }
 
