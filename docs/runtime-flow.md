@@ -16,17 +16,18 @@ When `vtt serve` runs:
 When the hotkey starts dictation:
 
 1. [`internal/app/app.go`](/home/fred/git/vtt/internal/app/app.go) shows the overlay immediately.
-2. The injector captures the active target window so focus can be restored later.
-3. [`internal/recorder/recorder.go`](/home/fred/git/vtt/internal/recorder/recorder.go) starts local microphone capture first.
-4. In parallel, [`internal/openai/transcribe.go`](/home/fred/git/vtt/internal/openai/transcribe.go) creates a realtime transcription session through the official OpenAI SDK and connects the websocket.
-5. Audio chunks that arrive before the websocket is ready are buffered in memory.
-6. Once the websocket is ready, the buffered audio is flushed first, then live audio continues streaming normally.
+2. [`internal/recorder/recorder.go`](/home/fred/git/vtt/internal/recorder/recorder.go) starts local microphone capture immediately.
+3. The injector captures the active target window after capture has already started so focus can be restored later.
+4. [`internal/openai/transcribe.go`](/home/fred/git/vtt/internal/openai/transcribe.go) starts a `DictationSession`.
+5. The `DictationSession` creates the realtime transcription session through the official OpenAI SDK and connects the websocket.
+6. Audio chunks that arrive before the websocket is ready are buffered in memory inside the dictation session.
+7. Once the websocket is ready, the buffered audio is flushed first, then live audio continues streaming normally.
 
 Why this matters:
 
 - the overlay can pop immediately
 - the user can start speaking immediately
-- the beginning of speech is less likely to be clipped by connection setup time
+- the beginning of speech is less likely to be clipped by window lookup or connection setup time
 
 ## Record Stop
 
@@ -34,9 +35,10 @@ When the hotkey stops dictation:
 
 1. [`internal/app/app.go`](/home/fred/git/vtt/internal/app/app.go) stops local recording.
 2. The overlay switches to transcribing.
-3. The app waits for the audio pump to finish flushing local chunks into the realtime stream.
-4. The OpenAI stream is committed.
-5. The app waits for the final transcription event.
+3. [`internal/openai/transcribe.go`](/home/fred/git/vtt/internal/openai/transcribe.go) finalizes the `DictationSession`.
+4. The dictation session decides whether there is any trailing audio left that still needs a final commit.
+5. If segmented mode already emitted the spoken chunks and there is no trailing audio left, finalization returns without forcing an extra commit.
+6. Otherwise the OpenAI stream is committed and the final transcription event is awaited.
 
 ## Insert
 
@@ -46,6 +48,17 @@ After transcription completes:
 2. The transcript is inserted via clipboard paste or direct typing depending on config.
 3. Terminal windows use the configured terminal paste shortcut.
 4. The overlay shows success and then hides.
+
+## Segmented Streaming
+
+When `streaming.mode = "segment"`:
+
+1. OpenAI server VAD detects pauses while the hotkey is still held.
+2. Completed phrases are emitted as segment events from the dictation session.
+3. [`internal/app/app.go`](/home/fred/git/vtt/internal/app/app.go) updates the overlay and asks [`internal/injector/injector.go`](/home/fred/git/vtt/internal/injector/injector.go) to type those completed phrases live.
+4. On release, finalization only flushes trailing speech that has not already been emitted as a completed segment.
+
+This is why segmented mode should feel more live than release-only mode without waiting for the whole utterance to finish.
 
 ## Short Recordings
 

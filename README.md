@@ -12,6 +12,9 @@ It was very much vibe-coded from scratch to... scratch an itch.
 
 - Global hotkey driven dictation on Linux X11
 - Hold-to-record by default, with optional toggle mode
+- Overlay appears immediately on hotkey press
+- Local recording starts before target-window lookup finishes
+- Early audio is buffered locally until the OpenAI realtime session is ready
 - XDG config file at `~/.config/vtt/config.json`
 - OpenAI API keys stored in the system keyring by default
 - Focus restore and paste back into the app that was active when recording
@@ -44,6 +47,14 @@ While `vtt serve` is running:
 2. Hold `Ctrl+Shift+Space`.
 3. Speak.
 4. Release the hotkey to stop and insert the transcript.
+
+Expected startup behavior on key-down:
+
+1. The overlay appears immediately.
+2. Local microphone capture starts right away.
+3. The app looks up the current target window while audio is already being captured.
+4. If the OpenAI realtime websocket is not ready yet, audio is buffered in memory.
+5. Once the realtime session is ready, buffered audio is flushed first and live audio continues streaming after it.
 
 ## Config
 
