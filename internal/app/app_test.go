@@ -39,6 +39,59 @@ func TestHandleDictationEventUpdatesOverlayWithPartialText(t *testing.T) {
 	}
 }
 
+func TestPartialPrependsAccumulatedSegments(t *testing.T) {
+	t.Parallel()
+
+	fakeOverlay := &overlayStub{}
+	app := &App{
+		cfg: config.Config{
+			Streaming: config.StreamingConfig{ShowPartialOverlay: true},
+		},
+		overlay: fakeOverlay,
+	}
+	state := &recordingState{
+		target:   injector.Target{WindowClass: "Gedit"},
+		liveText: "Hello world.",
+	}
+
+	_ = app.handleDictationEvent(context.Background(), state, openai.DictationEvent{
+		Type: openai.DictationEventPartial,
+		Text: "this is more",
+	})
+
+	if fakeOverlay.listeningText != "Hello world. this is more" {
+		t.Fatalf("listeningText = %q, want accumulated + partial", fakeOverlay.listeningText)
+	}
+}
+
+func TestEmptyPartialDoesNotFlashHelperWhenSegmentsExist(t *testing.T) {
+	t.Parallel()
+
+	fakeOverlay := &overlayStub{}
+	app := &App{
+		cfg: config.Config{
+			Streaming: config.StreamingConfig{ShowPartialOverlay: true},
+		},
+		overlay: fakeOverlay,
+	}
+	state := &recordingState{
+		target:   injector.Target{WindowClass: "Gedit"},
+		liveText: "Hello world.",
+	}
+
+	// Set initial text so we can detect if it gets cleared.
+	fakeOverlay.listeningText = "Hello world."
+
+	_ = app.handleDictationEvent(context.Background(), state, openai.DictationEvent{
+		Type: openai.DictationEventPartial,
+		Text: "",
+	})
+
+	if fakeOverlay.listeningText != "Hello world." {
+		t.Fatalf("listeningText = %q, want unchanged accumulated text", fakeOverlay.listeningText)
+	}
+}
+
 func TestHandleDictationEventAccumulatesSegments(t *testing.T) {
 	t.Parallel()
 

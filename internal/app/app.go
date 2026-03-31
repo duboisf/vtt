@@ -488,7 +488,16 @@ func (a *App) handleDictationEvent(
 	switch event.Type {
 	case openai.DictationEventPartial:
 		if a.cfg.Streaming.ShowPartialOverlay {
-			a.overlay.SetListeningText(state.target.WindowClass, event.Text)
+			display := state.liveText
+			if partial := strings.TrimSpace(event.Text); partial != "" {
+				if display != "" {
+					display += " "
+				}
+				display += partial
+			}
+			if display != "" {
+				a.overlay.SetListeningText(state.target.WindowClass, display)
+			}
 		}
 		return nil
 	case openai.DictationEventSegment:
