@@ -168,11 +168,11 @@ func (o *Overlay) AnimateChunk(text string) {
 	go o.animateChunk(token, shorten(text, o.bodyTextLimit()))
 }
 
-func (o *Overlay) ShowTranscribing() {
+func (o *Overlay) ShowFinishing(body string) {
 	o.show(viewState{
-		title:    "Transcribing",
-		subtitle: "Turning your speech into polished text",
-		body:     "Keeping code, Git, and GitHub terms intact.",
+		title:    "Finishing",
+		subtitle: "Wrapping up the last few words...",
+		body:     body,
 		accent:   color.RGBA{R: 245, G: 158, B: 11, A: 255},
 	}, false)
 }

@@ -50,7 +50,7 @@ type overlayUI interface {
 	ShowListening(windowClass string)
 	SetListeningText(windowClass, text string)
 	AnimateChunk(text string)
-	ShowTranscribing()
+	ShowFinishing(body string)
 	ShowSuccess(text string)
 	ShowError(err error)
 	SetLevel(level float64)
@@ -243,7 +243,7 @@ func (a *App) stopRecordingLocked(ctx context.Context) {
 	state := a.recording
 	a.recording = nil
 	a.transcribing = true
-	a.overlay.ShowTranscribing()
+	a.overlay.ShowFinishing(state.displayText)
 	sessionlog.Infof("stopping recording and finalizing transcription after %s",
 		time.Since(state.startedAt).Round(10*time.Millisecond))
 
@@ -303,7 +303,7 @@ func (a *App) forceStopAfter(ctx context.Context, id uint64, maxDuration time.Du
 	a.transcribing = true
 	a.mu.Unlock()
 
-	a.overlay.ShowTranscribing()
+	a.overlay.ShowFinishing(state.displayText)
 	sessionlog.Warnf("auto-stopping recording after timeout")
 	go a.finishRecording(ctx, state)
 }
