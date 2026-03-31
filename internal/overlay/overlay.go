@@ -6,6 +6,8 @@ import (
 	"image/color"
 	"image/draw"
 	"math"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -17,9 +19,11 @@ import (
 	"github.com/BurntSushi/xgbutil/xwindow"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
+	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
 
 	"vtt/internal/config"
+	"vtt/internal/sessionlog"
 )
 
 type Overlay struct {
@@ -39,6 +43,8 @@ type Overlay struct {
 	wavePhase    float64
 	partialToken uint64
 	height       int
+	face         font.Face
+	glyphWidth   int
 }
 
 type viewState struct {
@@ -69,11 +75,15 @@ func New(cfg config.OverlayConfig) (*Overlay, error) {
 	_ = ewmh.WmWindowOpacitySet(xu, win.Id, cfg.Opacity)
 	win.Stack(xproto.StackModeAbove)
 
+	face, glyphW := loadSystemFont(13)
+
 	return &Overlay{
-		cfg:    cfg,
-		x:      xu,
-		win:    win,
-		height: cfg.Height,
+		cfg:        cfg,
+		x:          xu,
+		win:        win,
+		height:     cfg.Height,
+		face:       face,
+		glyphWidth: glyphW,
 		state: viewState{
 			title:    "Ready",
 			subtitle: "Voice typing is armed",
@@ -313,12 +323,12 @@ func (o *Overlay) drawLocked() {
 		o.wavePhase,
 	)
 
-	writeText(img, 150, 36, o.state.title, o.state.accent, basicfont.Face7x13)
-	writeText(img, 150, 62, o.state.subtitle, color.RGBA{R: 226, G: 232, B: 240, A: 255}, basicfont.Face7x13)
+	writeText(img, 150, 36, o.state.title, o.state.accent, o.face)
+	writeText(img, 150, 62, o.state.subtitle, color.RGBA{R: 226, G: 232, B: 240, A: 255}, o.face)
 
 	bodyColor := color.RGBA{R: 148, G: 163, B: 184, A: 255}
 	for i, line := range bodyLines {
-		writeText(img, 150, bodyStartY+i*lineHeight, line, bodyColor, basicfont.Face7x13)
+		writeText(img, 150, bodyStartY+i*lineHeight, line, bodyColor, o.face)
 	}
 
 	ximg := xgraphics.NewConvert(o.x, img)
@@ -506,19 +516,21 @@ func position(xu *xgbutil.XUtil, cfg config.OverlayConfig) (int, int) {
 }
 
 func (o *Overlay) subtitleTextLimit() int {
-	return textLimit(o.cfg.Width, 20)
+	return textLimit(o.cfg.Width, 20, o.glyphWidth)
 }
 
 func (o *Overlay) bodyTextLimit() int {
-	return textLimit(o.cfg.Width, 20)
+	return textLimit(o.cfg.Width, 20, o.glyphWidth)
 }
 
-func textLimit(width int, rightPadding int) int {
+func textLimit(width, rightPadding, glyphWidth int) int {
 	const (
-		textLeft   = 150
-		glyphWidth = 7
-		minChars   = 12
+		textLeft = 150
+		minChars = 12
 	)
+	if glyphWidth <= 0 {
+		glyphWidth = 7
+	}
 
 	available := width - textLeft - rightPadding
 	if available <= 0 {
@@ -568,6 +580,46 @@ func wrapLines(text string, maxChars int) []string {
 		}
 	}
 	return lines
+}
+
+func loadSystemFont(size float64) (font.Face, int) {
+	path := findSystemMonoFont()
+	if path != "" {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			f, err := opentype.Parse(data)
+			if err == nil {
+				face, err := opentype.NewFace(f, &opentype.FaceOptions{
+					Size:    size,
+					DPI:     72,
+					Hinting: font.HintingFull,
+				})
+				if err == nil {
+					adv, ok := face.GlyphAdvance('M')
+					w := 7
+					if ok {
+						w = adv.Round()
+					}
+					sessionlog.Infof("overlay font: %s (%.0fpt, glyph %dpx)", path, size, w)
+					return face, w
+				}
+			}
+		}
+		sessionlog.Warnf("failed to load font %s, falling back to basicfont", path)
+	}
+	return basicfont.Face7x13, 7
+}
+
+func findSystemMonoFont() string {
+	out, err := exec.Command("fc-match", "monospace", "--format=%{file}").Output()
+	if err != nil {
+		return ""
+	}
+	path := strings.TrimSpace(string(out))
+	if _, err := os.Stat(path); err != nil {
+		return ""
+	}
+	return path
 }
 
 func shorten(s string, max int) string {
