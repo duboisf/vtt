@@ -203,10 +203,7 @@ func (o *Overlay) ShowFinishing(body, shortcut string, timeout time.Duration) {
 		heartbeatWave: true,
 	}, false)
 	if timeout > 0 {
-		o.mu.Lock()
-		token := o.animToken
-		o.mu.Unlock()
-		go o.animateCountdown(token, timeout)
+		go o.animateCountdown(timeout)
 	}
 }
 
@@ -215,17 +212,17 @@ func finishingSubtitle(remaining time.Duration) string {
 	if secs <= 0 {
 		return "Wrapping up the last few words..."
 	}
-	return fmt.Sprintf("Wrapping up the last few words... (%ds)", secs)
+	return fmt.Sprintf("Wrapping up the last few words... (%.1fs)", remaining.Seconds())
 }
 
-func (o *Overlay) animateCountdown(token uint64, timeout time.Duration) {
+func (o *Overlay) animateCountdown(timeout time.Duration) {
 	deadline := time.Now().Add(timeout)
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
 	for range ticker.C {
 		o.mu.Lock()
-		if token != o.animToken || !o.visible || o.state.title != "Finishing" {
+		if !o.visible || o.state.title != "Finishing" {
 			o.mu.Unlock()
 			return
 		}
