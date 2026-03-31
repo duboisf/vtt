@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/BurntSushi/xgb/xinerama"
 	"github.com/BurntSushi/xgb/xproto"
 	"github.com/BurntSushi/xgbutil"
 	"github.com/BurntSushi/xgbutil/ewmh"
@@ -449,7 +450,7 @@ func (o *Overlay) drawLocked() {
 	draw.Draw(img, img.Bounds(), &image.Uniform{C: bg}, image.Point{}, draw.Src)
 
 	drawRect(img, image.Rect(0, 0, img.Bounds().Dx(), 6), o.state.accent)
-	writeText(img, 20, 18, "Vocis", color.RGBA{R: 55, G: 65, B: 81, A: 255}, o.smallFace)
+	writeText(img, o.cfg.Width-len("Vocis")*o.glyphWidth-12, 24, "Vocis", color.RGBA{R: 148, G: 163, B: 184, A: 255}, o.smallFace)
 	drawRect(img, image.Rect(20, 22, 20+96, 24), color.RGBA{R: 24, G: 38, B: 65, A: 255})
 	drawBars(
 		img,
@@ -612,7 +613,7 @@ func (o *Overlay) captureFrameLocked() *image.RGBA {
 	draw.Draw(img, img.Bounds(), &image.Uniform{C: bg}, image.Point{}, draw.Src)
 
 	drawRect(img, image.Rect(0, 0, img.Bounds().Dx(), 6), o.state.accent)
-	writeText(img, 20, 18, "Vocis", color.RGBA{R: 55, G: 65, B: 81, A: 255}, o.smallFace)
+	writeText(img, o.cfg.Width-len("Vocis")*o.glyphWidth-12, 24, "Vocis", color.RGBA{R: 148, G: 163, B: 184, A: 255}, o.smallFace)
 	drawRect(img, image.Rect(20, 22, 20+96, 24), color.RGBA{R: 24, G: 38, B: 65, A: 255})
 	drawBars(img, image.Rect(26, 42, 132, 98), o.state.accent, o.level,
 		o.state.reactiveWave, o.state.idleWave, o.wavePhase)
@@ -825,16 +826,49 @@ func displayedListeningText(body string) string {
 }
 
 func position(xu *xgbutil.XUtil, cfg config.OverlayConfig) (int, int) {
-	screen := xu.Screen()
-	x := int(screen.WidthInPixels)/2 - cfg.Width/2
+	monX, monY, monW, _ := activeMonitor(xu)
+	x := monX + monW/2 - cfg.Width/2
 	if x < 0 {
 		x = 0
 	}
-	y := cfg.MarginTop
+	y := monY + cfg.MarginTop
 	if y < 0 {
 		y = 0
 	}
 	return x, y
+}
+
+func activeMonitor(xu *xgbutil.XUtil) (x, y, w, h int) {
+	screen := xu.Screen()
+	fallbackW := int(screen.WidthInPixels)
+	fallbackH := int(screen.HeightInPixels)
+
+	conn := xu.Conn()
+	if err := xinerama.Init(conn); err != nil {
+		return 0, 0, fallbackW, fallbackH
+	}
+	reply, err := xinerama.QueryScreens(conn).Reply()
+	if err != nil || len(reply.ScreenInfo) == 0 {
+		return 0, 0, fallbackW, fallbackH
+	}
+
+	ptrReply, err := xproto.QueryPointer(conn, xu.RootWin()).Reply()
+	if err != nil {
+		info := reply.ScreenInfo[0]
+		return int(info.XOrg), int(info.YOrg), int(info.Width), int(info.Height)
+	}
+	px, py := int(ptrReply.RootX), int(ptrReply.RootY)
+
+	for _, info := range reply.ScreenInfo {
+		ix, iy := int(info.XOrg), int(info.YOrg)
+		iw, ih := int(info.Width), int(info.Height)
+		if px >= ix && px < ix+iw && py >= iy && py < iy+ih {
+			return ix, iy, iw, ih
+		}
+	}
+
+	info := reply.ScreenInfo[0]
+	return int(info.XOrg), int(info.YOrg), int(info.Width), int(info.Height)
 }
 
 func (o *Overlay) subtitleTextLimit() int {
