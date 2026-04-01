@@ -356,28 +356,27 @@ func TestStartStreamKeepsFirstWordWhenCompletedTranscriptIsSuffix(t *testing.T) 
 	}
 }
 
-func TestShouldIgnoreMissingTrailingFinal(t *testing.T) {
+func TestCanSkipTrailingTimeout(t *testing.T) {
 	t.Parallel()
 
 	session := &DictationSession{
-		segmentCount:  1,
+		segmentCount: 1,
 	}
 	stream := &Stream{}
 
-	if !session.shouldIgnoreMissingTrailingFinal(context.DeadlineExceeded, stream) {
-		t.Fatal("expected missing trailing final to be ignored for segmented dictation")
+	if !session.canSkipTrailingTimeout(context.DeadlineExceeded, stream) {
+		t.Fatal("expected trailing timeout to be skippable for segmented dictation")
 	}
 }
 
-func TestShouldNotIgnoreMissingTrailingFinalWithoutSegments(t *testing.T) {
+func TestCannotSkipTrailingTimeoutWithoutSegments(t *testing.T) {
 	t.Parallel()
 
-	session := &DictationSession{
-	}
+	session := &DictationSession{}
 	stream := &Stream{}
 
-	if session.shouldIgnoreMissingTrailingFinal(context.DeadlineExceeded, stream) {
-		t.Fatal("expected missing trailing final to fail when no live segments were inserted")
+	if session.canSkipTrailingTimeout(context.DeadlineExceeded, stream) {
+		t.Fatal("expected trailing timeout to fail when no live segments were inserted")
 	}
 }
 
