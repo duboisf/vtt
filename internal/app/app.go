@@ -29,6 +29,7 @@ type App struct {
 	injector   injectorClient
 	transcribe *openai.Client
 	store      *securestore.Store
+	apiKey     string
 
 	mu                       sync.Mutex
 	recording                *recordingState
@@ -94,6 +95,7 @@ func (a *App) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	a.apiKey = apiKey
 
 	a.recorder = recorder.New()
 	a.injector = injector.New(a.cfg.Insertion, a.cfg.Hotkey)
@@ -188,7 +190,23 @@ func (a *App) handleStop(ctx context.Context) {
 	a.stopRecordingLocked(ctx)
 }
 
+func (a *App) reloadConfig() {
+	cfg, path, err := config.Load()
+	if err != nil {
+		sessionlog.Warnf("config reload failed, keeping current: %v", err)
+		return
+	}
+	a.cfg.OpenAI = cfg.OpenAI
+	a.cfg.Recording = cfg.Recording
+	a.cfg.Streaming = cfg.Streaming
+	a.cfg.PostProcess = cfg.PostProcess
+	a.cfg.LogWindowTitle = cfg.LogWindowTitle
+	a.transcribe = openai.New(a.apiKey, a.cfg.OpenAI, a.cfg.Streaming)
+	sessionlog.Infof("config reloaded: %s", path)
+}
+
 func (a *App) startRecordingLocked(ctx context.Context) {
+	a.reloadConfig()
 	a.dismissCompletionOverlay = false
 	a.overlay.ShowListening("", a.cfg.HotkeyMode)
 
