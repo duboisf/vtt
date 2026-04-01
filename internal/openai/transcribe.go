@@ -307,17 +307,20 @@ func (s *DictationSession) Events() <-chan DictationEvent { return s.events }
 func (s *DictationSession) Finalize(ctx context.Context) (FinalizeResult, error) {
 	s.setLiveSegments(false)
 
-	// Signal the pump to stop (in case it's waiting on a hung connect).
-	s.cancel()
-
-	// Wait for the pump goroutine to exit.
+	// Wait for the pump to exit naturally (samples channel closes).
+	// Only cancel as a fallback if the finalization context expires.
 	var pumpErr error
 	select {
 	case pumpErr = <-s.pumpDone:
 	case <-ctx.Done():
+		s.cancel()
 		s.closeStream()
 		return FinalizeResult{}, ctx.Err()
 	}
+	// Pump exited. Defer cancel to clean up consumeStreamEvents AFTER
+	// we've collected trailing results.
+	defer s.cancel()
+
 	if pumpErr != nil {
 		s.closeStream()
 		return FinalizeResult{}, pumpErr

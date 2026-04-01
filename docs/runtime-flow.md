@@ -114,6 +114,7 @@ The log is the best place to look for:
 
 This repo intentionally uses a high bar before calling work done:
 
+- Test-Driven Development (TDD) for bug fixes: write a failing test first, then fix
 - unit tests where they make sense
 - successful build
 - local runtime verification for behavior changes whenever feasible

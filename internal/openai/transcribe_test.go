@@ -698,6 +698,95 @@ func decodePCM16(data []byte) []int16 {
 	return samples
 }
 
+func TestFinalizeReceivesTrailingSegmentAfterSamplesClose(t *testing.T) {
+	t.Parallel()
+
+	upgrader := websocket.Upgrader{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/realtime/client_secrets":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"expires_at": 123,
+				"value":      "ek_test",
+				"session":    map[string]any{"type": "transcription"},
+			})
+		case "/realtime":
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Fatalf("upgrade: %v", err)
+			}
+			defer conn.Close()
+
+			_ = conn.WriteJSON(map[string]any{
+				"type":    "session.created",
+				"session": map[string]any{"type": "transcription"},
+			})
+			var sessionUpdate map[string]any
+			_ = conn.ReadJSON(&sessionUpdate)
+			_ = conn.WriteJSON(map[string]any{"type": "session.updated"})
+
+			// Read the audio append.
+			var appendEvent map[string]any
+			_ = conn.ReadJSON(&appendEvent)
+
+			// Wait for the commit (sent by Finalize after samples close).
+			var commitEvent map[string]any
+			_ = conn.ReadJSON(&commitEvent)
+
+			// Simulate a delay before the final transcript arrives.
+			// This is the critical part: the final arrives AFTER the pump
+			// has exited (samples closed). The stream event consumer must
+			// still be running to receive it.
+			time.Sleep(100 * time.Millisecond)
+			_ = conn.WriteJSON(map[string]any{
+				"type":       "conversation.item.input_audio_transcription.completed",
+				"transcript": "trailing words",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	cfg := config.Default()
+	cfg.OpenAI.BaseURL = server.URL
+
+	client := New("test-key", cfg.OpenAI, cfg.Streaming)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	samples := make(chan []int16, 1)
+	samples <- []int16{1000, -1000, 2000, -2000}
+
+	dictation, err := client.StartDictation(ctx, 24000, 1, samples)
+	if err != nil {
+		t.Fatalf("start dictation: %v", err)
+	}
+
+	// Drain events to avoid blocking the session.
+	go func() {
+		for range dictation.Events() {
+		}
+	}()
+
+	// Let the stream connect and audio flush.
+	time.Sleep(200 * time.Millisecond)
+
+	// Close samples — simulates the user releasing the hotkey.
+	close(samples)
+
+	result, err := dictation.Finalize(ctx)
+	if err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+
+	if !strings.Contains(result.Text, "trailing") {
+		t.Fatalf("result.Text = %q, want it to contain 'trailing'", result.Text)
+	}
+}
+
 func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
