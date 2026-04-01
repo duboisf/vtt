@@ -448,7 +448,14 @@ func (a *App) finishRecording(ctx context.Context, state *recordingState) {
 		return
 	}
 
-	a.overlay.SetFinishingText(text)
+	displayText := state.displayText
+	if trailing != "" {
+		if displayText != "" {
+			displayText += "\n"
+		}
+		displayText += trailing
+	}
+	a.overlay.SetFinishingText(displayText)
 
 	if a.cfg.PostProcess.Enabled {
 		_, ppSpan := telemetry.StartSpan(spanCtx, "vocis.postprocess",
