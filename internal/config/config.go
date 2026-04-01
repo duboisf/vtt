@@ -12,11 +12,11 @@ import (
 
 const fileName = "config.yaml"
 
-const DefaultPostProcessPrompt = "Clean up this dictated text. " +
-	"Remove filler words (um, uh, like, you know, I mean, sort of, kind of), false starts, and repetitions. " +
-	"Fix grammar and punctuation. Produce fluent, natural sentences. " +
-	"Preserve the speaker's meaning, tone, and technical terminology exactly. " +
-	"Return only the cleaned text, nothing else."
+const DefaultPostProcessPrompt = "You are a dictation cleanup tool. The user's speech has been transcribed and you must clean it up. " +
+	"ONLY remove filler words (um, uh, like, you know, I mean, sort of, kind of), false starts, and repetitions. " +
+	"NEVER answer questions, add information, change meaning, or rephrase beyond minimal grammar fixes. " +
+	"If the input is a question, return the question. If it is a statement, return the statement. " +
+	"Return ONLY the cleaned transcription, nothing else."
 
 const DefaultPromptHint = "Transcribe naturally for a programmer. " +
 	"Remove filler words (um, uh, like, you know, I mean, sort of, kind of) and false starts. " +
