@@ -4,7 +4,7 @@ This repo is intentionally small. The main runtime path is split by responsibili
 
 Top-level entry points:
 
-- [`cmd/vocis/main.go`](/home/fred/git/vtt/cmd/vocis/main.go): CLI entrypoint for `serve`, `init`, `doctor`, and key management
+- [`cmd/vocis/`](/home/fred/git/vtt/cmd/vocis/): Cobra-based CLI with one file per command (`root.go`, `serve.go`, `init_cmd.go`, `doctor.go`, `key.go`)
 - [`README.md`](/home/fred/git/vtt/README.md): user-facing setup and usage
 - [`config.example.yaml`](/home/fred/git/vtt/config.example.yaml): config shape example
 

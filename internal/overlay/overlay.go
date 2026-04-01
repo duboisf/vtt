@@ -210,9 +210,9 @@ func (o *Overlay) ShowFinishing(body, shortcut string, timeout time.Duration) {
 func finishingSubtitle(remaining time.Duration) string {
 	secs := int(remaining.Seconds())
 	if secs <= 0 {
-		return "Wrapping up the last few words..."
+		return "Wrapping up and post-processing..."
 	}
-	return fmt.Sprintf("Wrapping up the last few words... (%.1fs)", remaining.Seconds())
+	return fmt.Sprintf("Wrapping up and post-processing... (%.1fs)", remaining.Seconds())
 }
 
 func (o *Overlay) animateCountdown(timeout time.Duration) {
