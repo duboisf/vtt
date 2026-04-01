@@ -3,6 +3,7 @@ package openai
 import (
 	"context"
 	"strings"
+	"time"
 
 	openaisdk "github.com/openai/openai-go/v3"
 
@@ -10,10 +11,15 @@ import (
 	"vocis/internal/sessionlog"
 )
 
+const postProcessTimeout = 5 * time.Second
+
 func (c *Client) PostProcess(ctx context.Context, cfg config.PostProcessConfig, text string) string {
 	if !cfg.Enabled || strings.TrimSpace(text) == "" {
 		return text
 	}
+
+	ctx, cancel := context.WithTimeout(ctx, postProcessTimeout)
+	defer cancel()
 
 	resp, err := c.client.Chat.Completions.New(ctx, openaisdk.ChatCompletionNewParams{
 		Model: openaisdk.ChatModel(cfg.Model),
