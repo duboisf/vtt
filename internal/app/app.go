@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
+	"vocis/internal/audio"
 	"vocis/internal/config"
 	"vocis/internal/hotkeys"
 	"vocis/internal/injector"
@@ -30,6 +31,7 @@ type App struct {
 	transcribe *openai.Client
 	store      *securestore.Store
 	apiKey     string
+	ducker     *audio.Ducker
 
 	mu                       sync.Mutex
 	recording                *recordingState
@@ -208,6 +210,8 @@ func (a *App) reloadConfig() {
 
 func (a *App) startRecordingLocked(ctx context.Context) {
 	a.reloadConfig()
+	a.ducker = audio.NewDucker(a.cfg.Recording.DuckVolume)
+	a.ducker.Duck()
 	a.dismissCompletionOverlay = false
 	a.overlay.ShowListening("", a.cfg.HotkeyMode)
 
@@ -352,6 +356,7 @@ func (a *App) forceStopAfter(ctx context.Context, id uint64, maxDuration time.Du
 }
 
 func (a *App) finishRecording(ctx context.Context, state *recordingState) {
+	defer a.ducker.Restore()
 	defer func() {
 		a.mu.Lock()
 		a.transcribing = false

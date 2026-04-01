@@ -60,11 +60,12 @@ type OpenAIConfig struct {
 }
 
 type RecordingConfig struct {
-	Backend            string `yaml:"backend"`
-	Device             string `yaml:"device"`
-	SampleRate         int    `yaml:"sample_rate"`
-	Channels           int    `yaml:"channels"`
-	MaxDurationSeconds int    `yaml:"max_duration_seconds"`
+	Backend            string  `yaml:"backend"`
+	Device             string  `yaml:"device"`
+	SampleRate         int     `yaml:"sample_rate"`
+	Channels           int     `yaml:"channels"`
+	MaxDurationSeconds int     `yaml:"max_duration_seconds"`
+	DuckVolume         float64 `yaml:"duck_volume"`
 }
 
 type StreamingConfig struct {
@@ -112,6 +113,7 @@ func Default() Config {
 			SampleRate:         16000,
 			Channels:           1,
 			MaxDurationSeconds: 120,
+			DuckVolume:         0.1,
 		},
 		Streaming: StreamingConfig{
 			ShowPartialOverlay: true,
