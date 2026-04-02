@@ -365,8 +365,9 @@ func (a *App) finishRecording(ctx context.Context, state *recordingState) {
 		a.transcribing = false
 		a.mu.Unlock()
 	}()
+	var dictationErr error
 	defer state.cancel()
-	defer telemetry.EndSpan(state.span, nil)
+	defer func() { telemetry.EndSpan(state.span, dictationErr) }()
 
 	spanCtx := state.spanCtx
 
@@ -386,7 +387,7 @@ func (a *App) finishRecording(ctx context.Context, state *recordingState) {
 			a.hideCompletionOverlay()
 			return
 		}
-		state.span.RecordError(err)
+		dictationErr = err
 		sessionlog.Errorf("stop recording: %v", err)
 		a.showCompletionError(err)
 		state.cancel()
@@ -423,6 +424,7 @@ func (a *App) finishRecording(ctx context.Context, state *recordingState) {
 	finalizeDuration := time.Since(finalizeStart).Round(10 * time.Millisecond)
 	telemetry.EndSpan(transcribeSpan, err)
 	if err != nil {
+		dictationErr = err
 		if a.completionOverlayDismissed() {
 			sessionlog.Infof("transcription cancelled by user elapsed=%s error=%v", finalizeDuration, err)
 			return
@@ -491,6 +493,7 @@ func (a *App) finishRecording(ctx context.Context, state *recordingState) {
 	err = a.injector.Insert(insertCtx, state.target, text)
 	telemetry.EndSpan(insertSpan, err)
 	if err != nil {
+		dictationErr = err
 		sessionlog.Errorf("insert transcript: %v", err)
 		a.showCompletionError(err)
 		return
