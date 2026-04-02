@@ -200,7 +200,17 @@ func (s *Session) Cleanup() {}
 
 func (s *Session) stop(ctx context.Context) error {
 	if s.stream != nil {
-		s.stream.Stop()
+		done := make(chan struct{})
+		go func() {
+			s.stream.Stop()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-ctx.Done():
+			s.closeResources()
+			return ctx.Err()
+		}
 	}
 
 	timer := time.NewTimer(stopFlushDelay)
