@@ -24,8 +24,8 @@ func (c *Client) PostProcess(ctx context.Context, cfg config.PostProcessConfig, 
 		return PostProcessResult{Text: text}
 	}
 
-	if len(strings.Fields(text)) < 10 {
-		sessionlog.Infof("postprocess skipped (fewer than 10 words)")
+	if cfg.MinWordCount > 0 && len(strings.Fields(text)) < cfg.MinWordCount {
+		sessionlog.Infof("postprocess skipped words=%d min=%d", len(strings.Fields(text)), cfg.MinWordCount)
 		return PostProcessResult{Text: text}
 	}
 

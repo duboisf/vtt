@@ -38,9 +38,10 @@ type Config struct {
 }
 
 type PostProcessConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	Model   string `yaml:"model"`
-	Prompt  string `yaml:"prompt"`
+	Enabled      bool   `yaml:"enabled"`
+	Model        string `yaml:"model"`
+	Prompt       string `yaml:"prompt"`
+	MinWordCount int    `yaml:"min_word_count"`
 }
 
 type TelemetryConfig struct {
@@ -147,9 +148,10 @@ func Default() Config {
 			AutoHideMillis: 1800,
 		},
 		PostProcess: PostProcessConfig{
-			Enabled: true,
-			Model:   "gpt-4o-mini",
-			Prompt:  DefaultPostProcessPrompt,
+			Enabled:      true,
+			Model:        "gpt-4o-mini",
+			Prompt:       DefaultPostProcessPrompt,
+			MinWordCount: 10,
 		},
 		Telemetry: TelemetryConfig{
 			Enabled:  false,
