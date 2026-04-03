@@ -49,8 +49,9 @@ type Overlay struct {
 	targetHeight int
 	resizeToken  uint64
 	face         font.Face
-	smallFace    font.Face
-	glyphWidth   int
+	smallFace      font.Face
+	glyphWidth     int
+	smallGlyphWidth int
 
 	baseX      int
 	baseY      int
@@ -79,6 +80,7 @@ type countdownPhase struct {
 type viewState struct {
 	title        string
 	titleSuffix  string
+	submitHint   bool
 	subtitle     string
 	body         string
 	accent       color.RGBA
@@ -107,7 +109,7 @@ func New(cfg config.OverlayConfig) (*Overlay, error) {
 	win.Stack(xproto.StackModeAbove)
 
 	face, glyphW := loadSystemFont(13)
-	smallFace, _ := loadSystemFont(11)
+	smallFace, smallGlyphW := loadSystemFont(11)
 
 	return &Overlay{
 		cfg:        cfg,
@@ -115,7 +117,8 @@ func New(cfg config.OverlayConfig) (*Overlay, error) {
 		win:        win,
 		height:     cfg.Height,
 		face:       face,
-		smallFace:  smallFace,
+		smallFace:       smallFace,
+		smallGlyphWidth: smallGlyphW,
 		glyphWidth: glyphW,
 		baseX:      x,
 		baseY:      y,
@@ -184,11 +187,8 @@ func (o *Overlay) SetSubmitMode(enabled bool) {
 	if !o.visible || o.state.title != "Listening" {
 		return
 	}
-	if enabled {
-		o.state.titleSuffix = " — release to paste ⏎ submit"
-	} else {
-		o.state.titleSuffix = listeningHint("hold")
-	}
+	o.state.titleSuffix = listeningHint("hold")
+	o.state.submitHint = enabled
 	o.drawLocked()
 }
 
@@ -729,6 +729,12 @@ func (o *Overlay) drawLocked() {
 	if o.state.titleSuffix != "" {
 		suffixX := 150 + len([]rune(o.state.title))*o.glyphWidth
 		writeText(img, suffixX, 36, o.state.titleSuffix, color.RGBA{R: 226, G: 232, B: 240, A: 255}, o.smallFace)
+		if o.state.submitHint {
+			hintX := suffixX + len([]rune(o.state.titleSuffix))*o.smallGlyphWidth
+			pulse := 0.5 + 0.5*math.Sin(o.wavePhase*3)
+			alpha := uint8(140 + int(pulse*115))
+			writeText(img, hintX, 36, " ⏎ submit", color.RGBA{R: 251, G: 191, B: 36, A: alpha}, o.smallFace)
+		}
 	}
 	subtitleColor := color.RGBA{R: 226, G: 232, B: 240, A: 255}
 	for i, line := range strings.Split(o.state.subtitle, "\n") {
@@ -908,6 +914,12 @@ func (o *Overlay) captureFrameLocked() *image.RGBA {
 	if o.state.titleSuffix != "" {
 		suffixX := 150 + len([]rune(o.state.title))*o.glyphWidth
 		writeText(img, suffixX, 36, o.state.titleSuffix, color.RGBA{R: 226, G: 232, B: 240, A: 255}, o.smallFace)
+		if o.state.submitHint {
+			hintX := suffixX + len([]rune(o.state.titleSuffix))*o.smallGlyphWidth
+			pulse := 0.5 + 0.5*math.Sin(o.wavePhase*3)
+			alpha := uint8(140 + int(pulse*115))
+			writeText(img, hintX, 36, " ⏎ submit", color.RGBA{R: 251, G: 191, B: 36, A: alpha}, o.smallFace)
+		}
 	}
 	subtitleColor := color.RGBA{R: 226, G: 232, B: 240, A: 255}
 	for i, line := range strings.Split(o.state.subtitle, "\n") {
