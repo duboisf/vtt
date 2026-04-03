@@ -185,7 +185,7 @@ func (o *Overlay) SetSubmitMode(enabled bool) {
 		return
 	}
 	if enabled {
-		o.state.titleSuffix = " ⏎ will submit"
+		o.state.titleSuffix = " — release to paste ⏎ submit"
 	} else {
 		o.state.titleSuffix = listeningHint("hold")
 	}

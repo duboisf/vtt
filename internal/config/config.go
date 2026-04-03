@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -35,6 +36,7 @@ type Config struct {
 	Overlay        OverlayConfig    `yaml:"overlay"`
 	PostProcess    PostProcessConfig `yaml:"postprocess"`
 	Telemetry      TelemetryConfig  `yaml:"telemetry"`
+	YAMLIndent     int              `yaml:"yaml_indent"`
 }
 
 type PostProcessConfig struct {
@@ -156,6 +158,7 @@ func Default() Config {
 			Enabled:  false,
 			Endpoint: "localhost:4317",
 		},
+		YAMLIndent: 2,
 	}
 }
 
@@ -214,11 +217,17 @@ func Save(path string, cfg Config) error {
 		return err
 	}
 
-	data, err := yaml.Marshal(cfg)
-	if err != nil {
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	indent := cfg.YAMLIndent
+	if indent <= 0 {
+		indent = 2
+	}
+	enc.SetIndent(indent)
+	if err := enc.Encode(cfg); err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	return os.WriteFile(path, buf.Bytes(), 0o600)
 }
 
 func (c Config) Validate() error {
