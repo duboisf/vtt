@@ -245,8 +245,6 @@ func (i *injectorStub) Insert(_ context.Context, _ injector.Target, text string)
 	return nil
 }
 
-func (i *injectorStub) PressEnter(_ context.Context, _ injector.Target) error { return nil }
-
 func (i *injectorStub) InsertLive(_ context.Context, _ injector.Target, text string) error {
 	if i.err != nil {
 		return i.err
@@ -255,32 +253,4 @@ func (i *injectorStub) InsertLive(_ context.Context, _ injector.Target, text str
 	return nil
 }
 
-func TestApplyVoiceCommandsPressEnter(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		input     string
-		wantText  string
-		wantEnter bool
-	}{
-		// Token from post-processing.
-		{"Hello world [ENTER]", "Hello world", true},
-		{"Run the tests [ENTER]", "Run the tests", true},
-		{"Deploy to staging. [ENTER]", "Deploy to staging.", true},
-		{"[ENTER]", "", true},
-		// Raw phrases are NOT matched (too prone to false positives).
-		{"Hello world press enter", "Hello world press enter", false},
-		{"Hello world submit", "Hello world submit", false},
-		// No command.
-		{"Hello world", "Hello world", false},
-		{"", "", false},
-	}
-	for _, tt := range tests {
-		gotText, gotEnter := applyVoiceCommands(tt.input)
-		if gotText != tt.wantText || gotEnter != tt.wantEnter {
-			t.Errorf("applyVoiceCommands(%q) = (%q, %v), want (%q, %v)",
-				tt.input, gotText, gotEnter, tt.wantText, tt.wantEnter)
-		}
-	}
-}
 

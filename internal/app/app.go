@@ -82,7 +82,7 @@ type injectorClient interface {
 	CaptureTarget(ctx context.Context) (injector.Target, error)
 	Insert(ctx context.Context, target injector.Target, text string) error
 	InsertLive(ctx context.Context, target injector.Target, text string) error
-	PressEnter(ctx context.Context, target injector.Target) error
+
 }
 
 const minToggleInterval = 250 * time.Millisecond
@@ -516,28 +516,19 @@ func (a *App) finishRecording(ctx context.Context, state *recordingState) {
 		postProcessSkipped = result.Skipped
 	}
 
-	text, pressEnter := applyVoiceCommands(text)
-
 	insertCtx, insertSpan := telemetry.StartSpan(spanCtx, "vocis.inject",
 		attribute.String("target.window_id", state.target.WindowID),
 		attribute.String("target.window_class", state.target.WindowClass),
 		attribute.Int("text.length", len(text)),
-		attribute.Bool("press_enter", pressEnter),
 	)
 	err = a.injector.Insert(insertCtx, state.target, text)
+	telemetry.EndSpan(insertSpan, err)
 	if err != nil {
-		telemetry.EndSpan(insertSpan, err)
 		dictationErr = err
 		sessionlog.Errorf("insert transcript: %v", err)
 		a.showCompletionError(err)
 		return
 	}
-	if pressEnter {
-		if err := a.injector.PressEnter(insertCtx, state.target); err != nil {
-			sessionlog.Warnf("press enter failed: %v", err)
-		}
-	}
-	telemetry.EndSpan(insertSpan, err)
 	sessionlog.Infof("transcript inserted into window=%s", state.target.WindowID)
 	if postProcessSkipped {
 		a.overlay.ShowWarning("Raw text pasted — cleanup was skipped due to a timeout or error")
@@ -630,19 +621,6 @@ func isNoSpeechError(err error) bool {
 		strings.Contains(err.Error(), "transcription came back empty")
 }
 
-const enterToken = "[ENTER]"
-
-func applyVoiceCommands(text string) (string, bool) {
-	// Only check for the [ENTER] token from post-processing.
-	// Raw phrase matching was too prone to false positives.
-	trimmed := strings.TrimSpace(text)
-	if strings.HasSuffix(trimmed, enterToken) {
-		cleaned := strings.TrimSpace(trimmed[:len(trimmed)-len(enterToken)])
-		sessionlog.Infof("voice command detected=%q", enterToken)
-		return cleaned, true
-	}
-	return text, false
-}
 
 func userFacingError(err error) error {
 	msg := err.Error()
