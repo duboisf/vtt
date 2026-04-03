@@ -37,7 +37,7 @@ func (c *Client) PostProcess(ctx context.Context, cfg config.PostProcessConfig, 
 		prompt = config.DefaultPostProcessPrompt
 	}
 
-	sessionlog.Infof("postprocess input=%q prompt=%q", text, prompt[:min(len(prompt), 80)])
+	sessionlog.Debugf("postprocess input=%q prompt=%q", text, prompt[:min(len(prompt), 80)])
 
 	resp, err := c.client.Chat.Completions.New(ctx, openaisdk.ChatCompletionNewParams{
 		Model: openaisdk.ChatModel(cfg.Model),
@@ -62,6 +62,7 @@ func (c *Client) PostProcess(ctx context.Context, cfg config.PostProcessConfig, 
 		return PostProcessResult{Text: text, Skipped: true}
 	}
 
-	sessionlog.Infof("postprocess cleaned=%d raw=%d model=%s result=%q", len(cleaned), len(text), cfg.Model, cleaned)
+	sessionlog.Debugf("postprocess result=%q", cleaned)
+	sessionlog.Infof("postprocess cleaned=%d raw=%d model=%s", len(cleaned), len(text), cfg.Model)
 	return PostProcessResult{Text: cleaned}
 }

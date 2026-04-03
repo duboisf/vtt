@@ -76,6 +76,10 @@ func logDir() (string, error) {
 	return dir, nil
 }
 
+func Debugf(format string, args ...any) {
+	log.Printf("DEBUG "+format, args...)
+}
+
 func Infof(format string, args ...any) {
 	log.Printf("INFO  "+format, args...)
 }
