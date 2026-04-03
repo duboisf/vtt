@@ -728,12 +728,12 @@ func (o *Overlay) drawLocked() {
 	writeText(img, 150, 36, o.state.title, o.state.accent, o.face)
 	if o.state.titleSuffix != "" {
 		suffixX := 150 + len([]rune(o.state.title))*o.glyphWidth
-		writeText(img, suffixX, 36, o.state.titleSuffix, color.RGBA{R: 226, G: 232, B: 240, A: 255}, o.smallFace)
+		writeText(img, suffixX, 36, o.state.titleSuffix, color.RGBA{R: 226, G: 232, B: 240, A: 255}, o.face)
 		if o.state.submitHint {
-			hintX := suffixX + len([]rune(o.state.titleSuffix))*o.smallGlyphWidth
+			hintX := suffixX + len([]rune(o.state.titleSuffix))*o.glyphWidth
 			pulse := 0.5 + 0.5*math.Sin(o.wavePhase*3)
 			alpha := uint8(140 + int(pulse*115))
-			writeText(img, hintX, 36, " ⏎ submit", color.RGBA{R: 251, G: 191, B: 36, A: alpha}, o.smallFace)
+			writeText(img, hintX, 36, " ⏎ submit", color.RGBA{R: 251, G: 191, B: 36, A: alpha}, o.face)
 		}
 	}
 	subtitleColor := color.RGBA{R: 226, G: 232, B: 240, A: 255}
@@ -913,12 +913,12 @@ func (o *Overlay) captureFrameLocked() *image.RGBA {
 	writeText(img, 150, 36, o.state.title, o.state.accent, o.face)
 	if o.state.titleSuffix != "" {
 		suffixX := 150 + len([]rune(o.state.title))*o.glyphWidth
-		writeText(img, suffixX, 36, o.state.titleSuffix, color.RGBA{R: 226, G: 232, B: 240, A: 255}, o.smallFace)
+		writeText(img, suffixX, 36, o.state.titleSuffix, color.RGBA{R: 226, G: 232, B: 240, A: 255}, o.face)
 		if o.state.submitHint {
-			hintX := suffixX + len([]rune(o.state.titleSuffix))*o.smallGlyphWidth
+			hintX := suffixX + len([]rune(o.state.titleSuffix))*o.glyphWidth
 			pulse := 0.5 + 0.5*math.Sin(o.wavePhase*3)
 			alpha := uint8(140 + int(pulse*115))
-			writeText(img, hintX, 36, " ⏎ submit", color.RGBA{R: 251, G: 191, B: 36, A: alpha}, o.smallFace)
+			writeText(img, hintX, 36, " ⏎ submit", color.RGBA{R: 251, G: 191, B: 36, A: alpha}, o.face)
 		}
 	}
 	subtitleColor := color.RGBA{R: 226, G: 232, B: 240, A: 255}
