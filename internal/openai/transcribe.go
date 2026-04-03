@@ -1069,7 +1069,10 @@ func (c *Client) sessionUpdateEvent() map[string]any {
 }
 
 func (c *Client) prompt() string {
-	return strings.TrimSpace(c.cfg.PromptHint)
+	if hint := strings.TrimSpace(c.cfg.PromptHint); hint != "" {
+		return hint
+	}
+	return config.DefaultPromptHint
 }
 
 func (c *Client) turnDetectionPayload() any {
