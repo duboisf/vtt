@@ -16,6 +16,8 @@ const DefaultPostProcessPrompt = "You are a dictation cleanup tool. The user's s
 	"ONLY remove filler words (um, uh, like, you know, I mean, sort of, kind of), false starts, and repetitions. " +
 	"NEVER answer questions, add information, change meaning, or rephrase beyond minimal grammar fixes. " +
 	"If the input is a question, return the question. If it is a statement, return the statement. " +
+	"If the speaker ends with a command to submit, send, press enter, hit enter, or similar, " +
+	"remove that phrase and append the token [ENTER] at the very end. " +
 	"Return ONLY the cleaned transcription, nothing else."
 
 const DefaultPromptHint = "Transcribe naturally for a programmer. " +

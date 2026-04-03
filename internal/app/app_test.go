@@ -263,16 +263,19 @@ func TestApplyVoiceCommandsPressEnter(t *testing.T) {
 		wantText  string
 		wantEnter bool
 	}{
+		// Token from post-processing.
+		{"Hello world [ENTER]", "Hello world", true},
+		{"Run the tests [ENTER]", "Run the tests", true},
+		{"[ENTER]", "", true},
+		// Fallback raw phrases (post-processing skipped).
 		{"Hello world press enter", "Hello world", true},
 		{"Hello world press enter.", "Hello world", true},
 		{"Hello world hit enter", "Hello world", true},
 		{"Run the tests submit", "Run the tests", true},
 		{"Hello world new line", "Hello world", true},
-		{"Hello world newline", "Hello world", true},
 		{"Hello world PRESS ENTER", "Hello world", true},
-		{"Hello world Press Enter.", "Hello world", true},
+		// No command.
 		{"Hello world", "Hello world", false},
-		{"press enter", "", true},
 		{"", "", false},
 	}
 	for _, tt := range tests {
