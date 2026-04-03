@@ -84,7 +84,7 @@ type injectorClient interface {
 	CaptureTarget(ctx context.Context) (injector.Target, error)
 	Insert(ctx context.Context, target injector.Target, text string) error
 	InsertLive(ctx context.Context, target injector.Target, text string) error
-	PressEnter(ctx context.Context) error
+	PressEnter(ctx context.Context, target injector.Target) error
 }
 
 const minToggleInterval = 250 * time.Millisecond
@@ -560,7 +560,8 @@ func (a *App) finishRecording(ctx context.Context, state *recordingState) {
 	}
 	sessionlog.Infof("transcript inserted into window=%s submit=%v", state.target.WindowID, state.submitMode)
 	if state.submitMode {
-		if err := a.injector.PressEnter(insertCtx); err != nil {
+		sessionlog.Infof("submit mode: pressing Enter on window=%s", state.target.WindowID)
+		if err := a.injector.PressEnter(insertCtx, state.target); err != nil {
 			sessionlog.Warnf("press enter failed: %v", err)
 		}
 	}

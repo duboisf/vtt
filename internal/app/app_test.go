@@ -247,7 +247,7 @@ func (i *injectorStub) Insert(_ context.Context, _ injector.Target, text string)
 	return nil
 }
 
-func (i *injectorStub) PressEnter(_ context.Context) error { return nil }
+func (i *injectorStub) PressEnter(_ context.Context, _ injector.Target) error { return nil }
 
 func (i *injectorStub) InsertLive(_ context.Context, _ injector.Target, text string) error {
 	if i.err != nil {

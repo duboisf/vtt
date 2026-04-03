@@ -309,9 +309,14 @@ func (i *Injector) releaseHeldModifiers(ctx context.Context) error {
 	return nil
 }
 
-func (i *Injector) PressEnter(ctx context.Context) error {
-	time.Sleep(50 * time.Millisecond)
-	if _, err := i.run(ctx, "xdotool", "key", "Return"); err != nil {
+func (i *Injector) PressEnter(ctx context.Context, target Target) error {
+	time.Sleep(100 * time.Millisecond)
+	args := []string{"key", "--clearmodifiers"}
+	if target.WindowID != "" {
+		args = append(args, "--window", target.WindowID)
+	}
+	args = append(args, "Return")
+	if _, err := i.run(ctx, "xdotool", args...); err != nil {
 		return fmt.Errorf("press enter: %w", err)
 	}
 	return nil
