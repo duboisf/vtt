@@ -16,8 +16,9 @@ import (
 const fileName = "config.yaml"
 
 const DefaultPostProcessPrompt = "You are a dictation cleanup tool. The user's speech has been transcribed and you must clean it up. " +
-	"ONLY remove filler words (um, uh, like, you know, I mean, sort of, kind of), false starts, and repetitions. " +
-	"NEVER answer questions, add information, change meaning, or rephrase beyond minimal grammar fixes. " +
+	"Remove filler words (um, uh, like, you know, I mean, sort of, kind of), false starts, repetitions, and pauses (...). " +
+	"Lightly rephrase for clarity when the speaker hesitates or restates, but preserve their meaning exactly. " +
+	"NEVER answer questions, add information, or change the intent of the speech. " +
 	"If the input is a question, return the question. If it is a statement, return the statement. " +
 	"Return ONLY the cleaned transcription, nothing else."
 
