@@ -608,7 +608,16 @@ func (a *App) showCompletionError(err error) {
 		a.overlay.Hide()
 		return
 	}
+	if isNoSpeechError(err) {
+		a.overlay.ShowWarning("No speech detected")
+		return
+	}
 	a.overlay.ShowError(userFacingError(err))
+}
+
+func isNoSpeechError(err error) bool {
+	return errors.Is(err, openai.ErrInputAudioBufferCommitEmpty) ||
+		strings.Contains(err.Error(), "transcription came back empty")
 }
 
 func userFacingError(err error) error {
@@ -620,8 +629,6 @@ func userFacingError(err error) error {
 		return errors.New("Could not connect to OpenAI (network timeout)")
 	case strings.Contains(msg, "stream was not established"):
 		return errors.New("Could not connect to OpenAI")
-	case strings.Contains(msg, "transcription came back empty"):
-		return errors.New("No speech detected")
 	default:
 		return err
 	}
