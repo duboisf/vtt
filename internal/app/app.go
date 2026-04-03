@@ -515,6 +515,8 @@ func (a *App) finishRecording(ctx context.Context, state *recordingState) {
 		postProcessSkipped = result.Skipped
 	}
 
+	text = applyVoiceCommands(text)
+
 	insertCtx, insertSpan := telemetry.StartSpan(spanCtx, "vocis.inject",
 		attribute.String("target.window_id", state.target.WindowID),
 		attribute.String("target.window_class", state.target.WindowClass),
@@ -618,6 +620,33 @@ func (a *App) showCompletionError(err error) {
 func isNoSpeechError(err error) bool {
 	return errors.Is(err, openai.ErrInputAudioBufferCommitEmpty) ||
 		strings.Contains(err.Error(), "transcription came back empty")
+}
+
+var trailingEnterPhrases = []string{
+	"press enter",
+	"hit enter",
+	"new line",
+	"newline",
+	"submit",
+}
+
+func applyVoiceCommands(text string) string {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	for _, phrase := range trailingEnterPhrases {
+		// Check with and without trailing period/punctuation.
+		for _, suffix := range []string{"", ".", "!", ","} {
+			candidate := phrase + suffix
+			if strings.HasSuffix(lower, candidate) {
+				trimmed := strings.TrimSpace(text[:len(text)-len(candidate)])
+				if trimmed == "" {
+					return "\n"
+				}
+				sessionlog.Infof("voice command detected=%q", phrase)
+				return trimmed + "\n"
+			}
+		}
+	}
+	return text
 }
 
 func userFacingError(err error) error {

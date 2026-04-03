@@ -253,3 +253,29 @@ func (i *injectorStub) InsertLive(_ context.Context, _ injector.Target, text str
 	return nil
 }
 
+func TestApplyVoiceCommandsPressEnter(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"Hello world press enter", "Hello world\n"},
+		{"Hello world press enter.", "Hello world\n"},
+		{"Hello world hit enter", "Hello world\n"},
+		{"Run the tests submit", "Run the tests\n"},
+		{"Hello world new line", "Hello world\n"},
+		{"Hello world newline", "Hello world\n"},
+		{"Hello world PRESS ENTER", "Hello world\n"},
+		{"Hello world Press Enter.", "Hello world\n"},
+		{"Hello world", "Hello world"},
+		{"press enter", "\n"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		if got := applyVoiceCommands(tt.input); got != tt.want {
+			t.Errorf("applyVoiceCommands(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
