@@ -213,6 +213,8 @@ func (o *overlayStub) ShowSuccess(text string) {
 }
 func (o *overlayStub) ShowError(error)    {}
 func (o *overlayStub) ShowWarning(string) {}
+func (o *overlayStub) GrabEscape() <-chan struct{} { return make(chan struct{}) }
+func (o *overlayStub) UngrabEscape()              {}
 func (o *overlayStub) SetLevel(float64) {}
 func (o *overlayStub) Hide() {
 	o.hideCalls++

@@ -69,6 +69,8 @@ type overlayUI interface {
 	ShowSuccess(text string)
 	ShowError(err error)
 	ShowWarning(subtitle string)
+	GrabEscape() <-chan struct{}
+	UngrabEscape()
 	SetLevel(level float64)
 	Hide()
 	Close()
@@ -359,6 +361,8 @@ func (a *App) forceStopAfter(ctx context.Context, id uint64, maxDuration time.Du
 }
 
 func (a *App) finishRecording(ctx context.Context, state *recordingState) {
+	escapeCh := a.overlay.GrabEscape()
+	defer a.overlay.UngrabEscape()
 	defer a.ducker.Restore()
 	defer func() {
 		a.mu.Lock()
@@ -475,7 +479,23 @@ func (a *App) finishRecording(ctx context.Context, state *recordingState) {
 			attribute.Int("input.length", len(text)),
 			attribute.String("model", a.cfg.PostProcess.Model),
 		)
-		result := a.transcribe.PostProcess(spanCtx, a.cfg.PostProcess, text)
+
+		ppCtx, ppCancel := context.WithCancel(spanCtx)
+		resultCh := make(chan openai.PostProcessResult, 1)
+		go func() {
+			resultCh <- a.transcribe.PostProcess(ppCtx, a.cfg.PostProcess, text)
+		}()
+
+		var result openai.PostProcessResult
+		select {
+		case result = <-resultCh:
+		case <-escapeCh:
+			ppCancel()
+			sessionlog.Infof("post-processing skipped by user (Escape)")
+			result = openai.PostProcessResult{Text: text, Skipped: true}
+		}
+		ppCancel()
+
 		ppSpan.SetAttributes(
 			attribute.Int("output.length", len(result.Text)),
 			attribute.Bool("skipped", result.Skipped),

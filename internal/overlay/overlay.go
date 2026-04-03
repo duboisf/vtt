@@ -16,6 +16,8 @@ import (
 	"github.com/BurntSushi/xgb/xproto"
 	"github.com/BurntSushi/xgbutil"
 	"github.com/BurntSushi/xgbutil/ewmh"
+	"github.com/BurntSushi/xgbutil/keybind"
+	"github.com/BurntSushi/xgbutil/xevent"
 	"github.com/BurntSushi/xgbutil/xgraphics"
 	"github.com/BurntSushi/xgbutil/xwindow"
 	"golang.org/x/image/font"
@@ -62,6 +64,10 @@ type Overlay struct {
 
 	countdownReset  chan countdownPhase
 	completedPhases []string
+
+	escapeCh      chan struct{}
+	escapeGrabbed bool
+	escapeXU      *xgbutil.XUtil
 }
 
 type countdownPhase struct {
@@ -98,6 +104,8 @@ func New(cfg config.OverlayConfig) (*Overlay, error) {
 	win.Unmap()
 	_ = ewmh.WmWindowOpacitySet(xu, win.Id, cfg.Opacity)
 	win.Stack(xproto.StackModeAbove)
+
+	keybind.Initialize(xu)
 
 	face, glyphW := loadSystemFont(13)
 	smallFace, _ := loadSystemFont(11)
@@ -323,6 +331,55 @@ func (o *Overlay) ShowError(err error) {
 		subtitle: shorten(err.Error(), o.subtitleTextLimit()),
 		accent:   color.RGBA{R: 248, G: 113, B: 113, A: 255},
 	}, true)
+}
+
+func (o *Overlay) GrabEscape() <-chan struct{} {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	if o.escapeGrabbed {
+		return o.escapeCh
+	}
+
+	xu, err := xgbutil.NewConn()
+	if err != nil {
+		sessionlog.Warnf("failed to open X connection for Escape grab: %v", err)
+		o.escapeCh = make(chan struct{}, 1)
+		return o.escapeCh
+	}
+	keybind.Initialize(xu)
+
+	o.escapeCh = make(chan struct{}, 1)
+	o.escapeXU = xu
+	err = keybind.KeyPressFun(func(_ *xgbutil.XUtil, _ xevent.KeyPressEvent) {
+		select {
+		case o.escapeCh <- struct{}{}:
+		default:
+		}
+	}).Connect(xu, xu.RootWin(), "Escape", true)
+	if err != nil {
+		sessionlog.Warnf("failed to grab Escape: %v", err)
+		xu.Conn().Close()
+		o.escapeXU = nil
+		return o.escapeCh
+	}
+	o.escapeGrabbed = true
+	go xevent.Main(xu)
+	return o.escapeCh
+}
+
+func (o *Overlay) UngrabEscape() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	if !o.escapeGrabbed {
+		return
+	}
+	keybind.Detach(o.escapeXU, o.escapeXU.RootWin())
+	xevent.Quit(o.escapeXU)
+	o.escapeXU.Conn().Close()
+	o.escapeXU = nil
+	o.escapeGrabbed = false
 }
 
 func (o *Overlay) Close() {
