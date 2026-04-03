@@ -3,10 +3,8 @@ package overlay
 import (
 	"os"
 	"testing"
-	"time"
 
 	"github.com/BurntSushi/xgbutil"
-	"github.com/BurntSushi/xgbutil/keybind"
 )
 
 func TestShouldAnimatePartialFromFirstWord(t *testing.T) {
@@ -96,7 +94,7 @@ func TestShortenUsesASCIIEllipsis(t *testing.T) {
 	}
 }
 
-func TestEscapeEventLoopExitsCleanlyOnConnectionClose(t *testing.T) {
+func TestGrabEscapeAndUngrab(t *testing.T) {
 	t.Parallel()
 
 	if os.Getenv("DISPLAY") == "" {
@@ -107,23 +105,27 @@ func TestEscapeEventLoopExitsCleanlyOnConnectionClose(t *testing.T) {
 	if err != nil {
 		t.Skipf("cannot open X connection: %v", err)
 	}
-	keybind.Initialize(xu)
+	defer xu.Conn().Close()
 
-	o := &Overlay{}
-	done := make(chan struct{})
-	go func() {
-		o.escapeEventLoop(xu)
-		close(done)
-	}()
+	o := &Overlay{x: xu}
+	ch := o.GrabEscape()
+	if ch == nil {
+		t.Fatal("GrabEscape returned nil channel")
+	}
+	if !o.escapeGrabbed {
+		t.Fatal("expected escapeGrabbed to be true")
+	}
 
-	// Close the connection — escapeEventLoop must exit without panic.
-	xu.Conn().Close()
+	// Double grab should return same channel.
+	ch2 := o.GrabEscape()
+	if ch != ch2 {
+		t.Fatal("expected same channel on double grab")
+	}
 
-	select {
-	case <-done:
-		// success
-	case <-time.After(2 * time.Second):
-		t.Fatal("escapeEventLoop did not exit after connection close")
+	// Ungrab should not panic.
+	o.UngrabEscape()
+	if o.escapeGrabbed {
+		t.Fatal("expected escapeGrabbed to be false after ungrab")
 	}
 }
 

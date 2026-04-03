@@ -12,12 +12,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/BurntSushi/xgb"
 	"github.com/BurntSushi/xgb/xinerama"
 	"github.com/BurntSushi/xgb/xproto"
 	"github.com/BurntSushi/xgbutil"
 	"github.com/BurntSushi/xgbutil/ewmh"
-	"github.com/BurntSushi/xgbutil/keybind"
-	"github.com/BurntSushi/xgbutil/xevent"
 	"github.com/BurntSushi/xgbutil/xgraphics"
 	"github.com/BurntSushi/xgbutil/xwindow"
 	"golang.org/x/image/font"
@@ -67,7 +66,8 @@ type Overlay struct {
 
 	escapeCh      chan struct{}
 	escapeGrabbed bool
-	escapeXU      *xgbutil.XUtil
+	escapeKeycode xproto.Keycode
+	escapeConn    *xgb.Conn
 }
 
 type countdownPhase struct {
@@ -104,8 +104,6 @@ func New(cfg config.OverlayConfig) (*Overlay, error) {
 	win.Unmap()
 	_ = ewmh.WmWindowOpacitySet(xu, win.Id, cfg.Opacity)
 	win.Stack(xproto.StackModeAbove)
-
-	keybind.Initialize(xu)
 
 	face, glyphW := loadSystemFont(13)
 	smallFace, _ := loadSystemFont(11)
@@ -341,45 +339,75 @@ func (o *Overlay) GrabEscape() <-chan struct{} {
 		return o.escapeCh
 	}
 
-	xu, err := xgbutil.NewConn()
+	// Use a separate X connection so WaitForEvent doesn't block the overlay.
+	conn, err := xgb.NewConn()
 	if err != nil {
 		sessionlog.Warnf("failed to open X connection for Escape grab: %v", err)
 		o.escapeCh = make(chan struct{}, 1)
 		return o.escapeCh
 	}
-	keybind.Initialize(xu)
 
-	o.escapeCh = make(chan struct{}, 1)
-	o.escapeXU = xu
-	err = keybind.KeyPressFun(func(_ *xgbutil.XUtil, _ xevent.KeyPressEvent) {
-		select {
-		case o.escapeCh <- struct{}{}:
-		default:
-		}
-	}).Connect(xu, xu.RootWin(), "Escape", true)
+	setup := xproto.Setup(conn)
+	root := setup.DefaultScreen(conn).Root
+	mapping, err := xproto.GetKeyboardMapping(conn,
+		setup.MinKeycode,
+		byte(setup.MaxKeycode-setup.MinKeycode+1),
+	).Reply()
 	if err != nil {
-		sessionlog.Warnf("failed to grab Escape: %v", err)
-		xu.Conn().Close()
-		o.escapeXU = nil
+		sessionlog.Warnf("failed to get keyboard mapping: %v", err)
+		conn.Close()
+		o.escapeCh = make(chan struct{}, 1)
 		return o.escapeCh
 	}
+	cols := int(mapping.KeysymsPerKeycode)
+	var escapeKeycode xproto.Keycode
+	for i := 0; i < len(mapping.Keysyms)/cols; i++ {
+		if mapping.Keysyms[i*cols] == 0xff1b { // XK_Escape
+			escapeKeycode = xproto.Keycode(int(setup.MinKeycode) + i)
+			break
+		}
+	}
+	if escapeKeycode == 0 {
+		sessionlog.Warnf("could not find Escape keycode")
+		conn.Close()
+		o.escapeCh = make(chan struct{}, 1)
+		return o.escapeCh
+	}
+
+	err = xproto.GrabKeyChecked(conn, true, root,
+		xproto.ModMaskAny, escapeKeycode,
+		xproto.GrabModeAsync, xproto.GrabModeAsync,
+	).Check()
+	if err != nil {
+		sessionlog.Warnf("failed to grab Escape: %v", err)
+		conn.Close()
+		o.escapeCh = make(chan struct{}, 1)
+		return o.escapeCh
+	}
+
+	o.escapeCh = make(chan struct{}, 1)
+	o.escapeKeycode = escapeKeycode
+	o.escapeConn = conn
 	o.escapeGrabbed = true
-	go o.escapeEventLoop(xu)
+	go o.escapeEventLoop(conn)
 	return o.escapeCh
 }
 
-func (o *Overlay) escapeEventLoop(xu *xgbutil.XUtil) {
+func (o *Overlay) escapeEventLoop(conn *xgb.Conn) {
 	for {
-		ev, err := xu.Conn().WaitForEvent()
-		if ev == nil && err == nil {
-			return // connection closed
+		ev, err := conn.WaitForEvent()
+		if ev == nil {
+			return // connection closed or error
 		}
 		if err != nil {
 			return
 		}
-		// Feed the event into xgbutil's event system so keybind handlers fire.
-		xevent.Enqueue(xu, ev, nil)
-		xevent.Read(xu, false)
+		if _, ok := ev.(xproto.KeyPressEvent); ok {
+			select {
+			case o.escapeCh <- struct{}{}:
+			default:
+			}
+		}
 	}
 }
 
@@ -390,9 +418,12 @@ func (o *Overlay) UngrabEscape() {
 	if !o.escapeGrabbed {
 		return
 	}
-	keybind.Detach(o.escapeXU, o.escapeXU.RootWin())
-	o.escapeXU.Conn().Close() // unblocks escapeEventLoop
-	o.escapeXU = nil
+	_ = xproto.UngrabKeyChecked(o.escapeConn, o.escapeKeycode,
+		xproto.Setup(o.escapeConn).DefaultScreen(o.escapeConn).Root,
+		xproto.ModMaskAny,
+	).Check()
+	o.escapeConn.Close()
+	o.escapeConn = nil
 	o.escapeGrabbed = false
 }
 
