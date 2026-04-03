@@ -20,6 +20,7 @@ type Registration struct {
 	x        *xgbutil.XUtil
 	down     chan struct{}
 	up       chan struct{}
+	tap      chan struct{}
 
 	trackedCodes map[xproto.Keycode]struct{}
 	keyState     func() (map[xproto.Keycode]bool, error)
@@ -51,7 +52,8 @@ func Register(shortcut string) (*Registration, error) {
 	}
 
 	r := &Registration{
-		shortcut:     shortcut,
+		shortcut: shortcut,
+		tap:      make(chan struct{}, 1),
 		x:            xu,
 		down:         make(chan struct{}, 1),
 		up:           make(chan struct{}, 1),
@@ -91,6 +93,10 @@ func (r *Registration) Shortcut() string {
 
 func (r *Registration) Down() <-chan struct{} {
 	return r.down
+}
+
+func (r *Registration) Tap() <-chan struct{} {
+	return r.tap
 }
 
 func (r *Registration) Up() <-chan struct{} {
@@ -167,6 +173,7 @@ func (r *Registration) handlePress() {
 	r.cancelReleaseTimerLocked()
 	if r.isDown {
 		r.mu.Unlock()
+		r.emit(r.tap)
 		return
 	}
 	r.isDown = true

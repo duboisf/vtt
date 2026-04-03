@@ -135,6 +135,8 @@ func (a *App) Run(ctx context.Context) error {
 			return a.shutdown()
 		case <-hk.Down():
 			a.handleDown(ctx)
+		case <-hk.Tap():
+			a.handleTap()
 		case <-hk.Up():
 			a.handleUp(ctx)
 		}
@@ -184,16 +186,21 @@ func (a *App) handleStart(ctx context.Context) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if a.transcribing {
-		return
-	}
-
-	if a.recording != nil {
-		a.toggleSubmitMode()
+	if a.transcribing || a.recording != nil {
 		return
 	}
 
 	a.startRecordingLocked(ctx)
+}
+
+func (a *App) handleTap() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.recording == nil {
+		return
+	}
+	a.toggleSubmitMode()
 }
 
 func (a *App) toggleSubmitMode() {
