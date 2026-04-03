@@ -32,10 +32,17 @@ func (c *Client) PostProcess(ctx context.Context, cfg config.PostProcessConfig, 
 	ctx, cancel := context.WithTimeout(ctx, postProcessTimeout)
 	defer cancel()
 
+	prompt := cfg.Prompt
+	if strings.TrimSpace(prompt) == "" {
+		prompt = config.DefaultPostProcessPrompt
+	}
+
+	sessionlog.Infof("postprocess input=%q prompt=%q", text, prompt[:min(len(prompt), 80)])
+
 	resp, err := c.client.Chat.Completions.New(ctx, openaisdk.ChatCompletionNewParams{
 		Model: openaisdk.ChatModel(cfg.Model),
 		Messages: []openaisdk.ChatCompletionMessageParamUnion{
-			openaisdk.SystemMessage(cfg.Prompt),
+			openaisdk.SystemMessage(prompt),
 			openaisdk.UserMessage(text),
 		},
 	})
