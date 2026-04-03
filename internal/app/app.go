@@ -629,7 +629,7 @@ func (a *App) dismissInFlightOverlay() bool {
 		a.sessionCancel()
 	}
 	a.transcribing = false
-	a.overlay.Hide()
+	a.overlay.ShowWarning("Cancelled — transcription discarded")
 	sessionlog.Infof("transcription cancelled by user")
 	return true
 }
