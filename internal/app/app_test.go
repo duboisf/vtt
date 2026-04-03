@@ -201,7 +201,9 @@ type overlayStub struct {
 }
 
 func (o *overlayStub) ShowHint(string)      {}
-func (o *overlayStub) ShowListening(string, string) {}
+func (o *overlayStub) ShowListening(string, string)  {}
+func (o *overlayStub) SetConnected(string)            {}
+func (o *overlayStub) SetConnecting(int, int)         {}
 func (o *overlayStub) AnimateChunk(text string) {
 	o.animatedChunks = append(o.animatedChunks, text)
 }

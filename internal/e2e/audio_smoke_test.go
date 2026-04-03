@@ -64,6 +64,7 @@ func TestPiperAudioToRealtimeSmoke(t *testing.T) {
 		cfg.Recording.SampleRate,
 		cfg.Recording.Channels,
 		recording.Samples(),
+		openai.ConnectCallbacks{},
 	)
 	if err != nil {
 		t.Fatalf("start dictation: %v", err)

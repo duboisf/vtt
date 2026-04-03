@@ -61,6 +61,8 @@ type recordingState struct {
 type overlayUI interface {
 	ShowHint(text string)
 	ShowListening(windowClass, hotkeyMode string)
+	SetConnected(windowClass string)
+	SetConnecting(attempt, max int)
 	SetListeningText(windowClass, text string)
 	AnimateChunk(text string)
 	ShowFinishing(body, shortcut string, timeout time.Duration)
@@ -267,6 +269,14 @@ func (a *App) startRecordingLocked(ctx context.Context) {
 		a.cfg.Recording.SampleRate,
 		a.cfg.Recording.Channels,
 		session.Samples(),
+		openai.ConnectCallbacks{
+			OnConnecting: func(attempt, max int) {
+				a.overlay.SetConnecting(attempt, max)
+			},
+			OnConnected: func() {
+				a.overlay.SetConnected(target.WindowClass)
+			},
+		},
 	)
 	if err != nil {
 		cancel()

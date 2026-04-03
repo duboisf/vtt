@@ -760,7 +760,7 @@ func TestFinalizeReceivesTrailingSegmentAfterSamplesClose(t *testing.T) {
 	samples := make(chan []int16, 1)
 	samples <- []int16{1000, -1000, 2000, -2000}
 
-	dictation, err := client.StartDictation(ctx, 24000, 1, samples)
+	dictation, err := client.StartDictation(ctx, 24000, 1, samples, ConnectCallbacks{})
 	if err != nil {
 		t.Fatalf("start dictation: %v", err)
 	}
@@ -870,7 +870,7 @@ func TestFinalizeSucceedsWhenCommitEmptyArrivesViaFinals(t *testing.T) {
 	samples := make(chan []int16, 4)
 	samples <- []int16{1000, -1000, 2000, -2000}
 
-	dictation, err := client.StartDictation(ctx, 24000, 1, samples)
+	dictation, err := client.StartDictation(ctx, 24000, 1, samples, ConnectCallbacks{})
 	if err != nil {
 		t.Fatalf("start dictation: %v", err)
 	}

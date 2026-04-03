@@ -3,6 +3,7 @@ package overlay
 import (
 	"fmt"
 	"image"
+	"io"
 	"image/color"
 	"image/draw"
 	"math"
@@ -143,11 +144,37 @@ func (o *Overlay) ShowListening(windowClass, hotkeyMode string) {
 	o.show(viewState{
 		title:        "Listening",
 		titleSuffix:  listeningHint(hotkeyMode),
-		subtitle:     listeningSubtitle(windowClass),
+		subtitle:     "○ Connecting...",
 		body:         body,
 		accent:       color.RGBA{R: 34, G: 197, B: 94, A: 255},
 		reactiveWave: true,
 	}, false)
+}
+
+func (o *Overlay) SetConnected(windowClass string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	if !o.visible || o.state.title != "Listening" {
+		return
+	}
+	o.state.subtitle = "● " + listeningSubtitle(windowClass)
+	o.drawLocked()
+}
+
+func (o *Overlay) SetConnecting(attempt, max int) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	if !o.visible || o.state.title != "Listening" {
+		return
+	}
+	if attempt > 1 {
+		o.state.subtitle = fmt.Sprintf("○ Reconnecting... (attempt %d/%d)", attempt, max)
+	} else {
+		o.state.subtitle = "○ Connecting..."
+	}
+	o.drawLocked()
 }
 
 func (o *Overlay) SetListeningText(windowClass, text string) {
@@ -422,7 +449,11 @@ func (o *Overlay) UngrabEscape() {
 		xproto.Setup(o.escapeConn).DefaultScreen(o.escapeConn).Root,
 		xproto.ModMaskAny,
 	).Check()
+	// Suppress the "Invalid event/error type: <nil>" log from xgb
+	// when closing the connection unblocks WaitForEvent.
+	xgb.Logger.SetOutput(io.Discard)
 	o.escapeConn.Close()
+	xgb.Logger.SetOutput(os.Stderr)
 	o.escapeConn = nil
 	o.escapeGrabbed = false
 }

@@ -254,9 +254,16 @@ type FinalizeResult struct {
 	Text string
 }
 
+// ConnectCallbacks receives notifications about connection status.
+type ConnectCallbacks struct {
+	OnConnecting func(attempt, max int)
+	OnConnected  func()
+}
+
 type DictationSession struct {
 	writeTimeout time.Duration
 	cancel       context.CancelFunc
+	callbacks    ConnectCallbacks
 
 	events   chan DictationEvent
 	pumpDone chan error
@@ -280,6 +287,7 @@ func (c *Client) StartDictation(
 	ctx context.Context,
 	sampleRate, channels int,
 	samples <-chan []int16,
+	callbacks ConnectCallbacks,
 ) (*DictationSession, error) {
 	if sampleRate <= 0 {
 		return nil, errors.New("recording.sample_rate must be greater than zero")
@@ -292,6 +300,7 @@ func (c *Client) StartDictation(
 	session := &DictationSession{
 		writeTimeout: c.writeTimeout,
 		cancel:       cancel,
+		callbacks:    callbacks,
 		events:       make(chan DictationEvent, 16),
 		pumpDone:     make(chan error, 1),
 		finals:       make(chan finalResult, 8),
@@ -434,6 +443,10 @@ func (s *DictationSession) connectAndBuffer(
 	samplesOpen := true
 
 	for attempt := 1; attempt <= maxConnectRetries; attempt++ {
+		if s.callbacks.OnConnecting != nil {
+			s.callbacks.OnConnecting(attempt, maxConnectRetries)
+		}
+
 		connectCh := make(chan result, 1)
 		go func() {
 			stream, err := client.StartStream(ctx, sampleRate, channels)
@@ -447,6 +460,9 @@ func (s *DictationSession) connectAndBuffer(
 				return nil, nil, ctx.Err()
 			case r := <-connectCh:
 				if r.err == nil {
+					if s.callbacks.OnConnected != nil {
+						s.callbacks.OnConnected()
+					}
 					return r.stream, buffered, nil
 				}
 				if attempt < maxConnectRetries {
