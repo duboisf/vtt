@@ -1,5 +1,6 @@
 hotkey: ctrl+shift+space
 hotkey_mode: hold
+log_window_title: false
 
 openai:
   base_url: https://api.openai.com/v1
@@ -28,6 +29,7 @@ recording:
   sample_rate: 16000
   channels: 1
   max_duration_seconds: 120
+  duck_volume: 0.1
 
 streaming:
   show_partial_overlay: true
@@ -45,7 +47,9 @@ insertion:
     - Alacritty
     - kitty
     - org.wezfurlong.wezterm
+    - WezTerm
     - XTerm
+    - Gnome-terminal
     - gnome-terminal-server
     - code
     - Cursor
@@ -56,17 +60,53 @@ overlay:
   margin_top: 44
   opacity: 0.94
   auto_hide_millis: 1800
+  font: ""
+  font_size: 13
+  branding: Vocis
+  ready:
+    title: Ready
+    subtitle: Voice typing is armed
+  listening:
+    title: Listening
+    suffix: "— release to paste"
+    submit_hint: "⏎ submit"
+    connecting: "○ Connecting..."
+    reconnecting: "○ Reconnecting... (attempt {attempt}/{max})"
+    connected: "● Ready to type into {window}"
+  finishing:
+    title: Finishing
+    cancel_hint: "— press {shortcut} to cancel"
+    wrapping_up: Wrapping up
+    post_processing: Post-processing
+    timed_out: "{phase} — timed out"
+    phase_done: done
+  success:
+    title: Typed
+    subtitle: Transcription inserted into your active app
+  error:
+    title: Error
+  warning:
+    title: Heads up
+    no_speech: No speech detected
+    cancelled: "Cancelled — transcription discarded"
+    postprocess_skipped: "Raw text pasted — cleanup was skipped due to a timeout or error"
 
 postprocess:
   enabled: true
   model: gpt-4o-mini
   prompt: >-
-    Clean up this dictated text. Remove filler words (um, uh, like, you know,
-    I mean, sort of, kind of), false starts, and repetitions. Fix grammar and
-    punctuation. Produce fluent, natural sentences. Preserve the speaker's
-    meaning, tone, and technical terminology exactly. Return only the cleaned
-    text, nothing else.
+    You are a dictation cleanup tool. The user's speech has been transcribed
+    and you must clean it up. Remove filler words (um, uh, like, you know,
+    I mean, sort of, kind of), false starts, repetitions, and pauses (...).
+    Lightly rephrase for clarity when the speaker hesitates or restates, but
+    preserve their meaning exactly. NEVER answer questions, add information,
+    or change the intent of the speech. If the input is a question, return
+    the question. If it is a statement, return the statement. Return ONLY
+    the cleaned transcription, nothing else.
+  min_word_count: 10
 
 telemetry:
   enabled: false
   endpoint: localhost:4317
+
+yaml_indent: 2

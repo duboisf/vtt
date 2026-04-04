@@ -5,22 +5,24 @@
 At a high level:
 
 - a global hotkey starts dictation
-- the overlay appears immediately
+- the overlay appears immediately with connection status
 - local microphone capture starts first
 - target-window capture happens after local recording has already started
-- early audio is buffered while the OpenAI realtime transcription session connects
+- early audio is buffered while the OpenAI realtime transcription session connects (retries up to 3 times)
 - buffered audio is flushed into the realtime session as soon as it is ready
 - audio is streamed to OpenAI after that
 - completed phrases accumulate in the overlay as you speak (one line per segment)
-- on release or stop, the dictation session decides whether there is trailing audio left to commit
+- on release or stop, the dictation session collects any trailing audio
+- the text is optionally cleaned up by an LLM (post-processing via gpt-4o-mini)
 - the accumulated text plus any trailing transcript is inserted back into the previously focused app as a single paste
+- if submit mode was toggled on during recording, Enter is pressed after paste
 
 Important constraints:
 
 - Linux X11 only for now
 - PulseAudio / PipeWire input capture
 - OpenAI API key stored in the system keyring or provided by `OPENAI_API_KEY`
-- overlay is intentionally lightweight and non-interactive
+- overlay is intentionally lightweight and non-interactive (except Escape during finishing)
 
 Core product choices:
 
@@ -30,5 +32,9 @@ Core product choices:
 - terminal windows use a terminal-safe paste shortcut
 - transcription is realtime-streamed, not uploaded from a WAV file
 - turn assembly and trailing-flush decisions live in the OpenAI dictation session, not in the app layer
+- post-processing cleans up filler words and hesitations but never answers questions or changes intent
+- config is reloaded on each recording start — no restart needed for most changes
+- all overlay text is configurable via named templates in the config file
+- audio ducking lowers speaker volume during recording to avoid mic feedback
 
 If you only need the "what is this thing" version of the repo, stop here.
