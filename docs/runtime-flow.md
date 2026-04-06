@@ -105,10 +105,11 @@ sequenceDiagram
 
 When `vocis serve` runs:
 
-1. [`cmd/vocis/serve.go`](/home/fred/git/vtt/cmd/vocis/serve.go) starts a session log.
-2. [`internal/config/config.go`](/home/fred/git/vtt/internal/config/config.go) loads config.
-3. [`internal/securestore/keyring.go`](/home/fred/git/vtt/internal/securestore/keyring.go) resolves the OpenAI API key.
-4. [`internal/app/app.go`](/home/fred/git/vtt/internal/app/app.go) creates the runtime dependencies and registers the hotkey.
+1. [`cmd/vocis/serve.go`](/home/fred/git/vtt/cmd/vocis/serve.go) starts a session log and loads config.
+2. `serve.go` creates the X11 platform implementations (overlay, injector, hotkey registrar).
+3. `serve.go` injects them into [`internal/app/app.go`](/home/fred/git/vtt/internal/app/app.go) via `app.New(cfg, deps)`.
+4. [`internal/securestore/keyring.go`](/home/fred/git/vtt/internal/securestore/keyring.go) resolves the OpenAI API key.
+5. `app.Run()` registers the hotkey (with fallback candidates) and enters the event loop.
 
 ## Config Reload
 
@@ -120,7 +121,7 @@ When the hotkey starts dictation:
 
 1. Config is reloaded from disk.
 2. Audio ducking lowers the default speaker volume (configurable via `recording.duck_volume`).
-3. [`internal/overlay/overlay.go`](/home/fred/git/vtt/internal/overlay/overlay.go) shows the overlay immediately with "○ Connecting..." status.
+3. [`internal/platform/x11/overlay.go`](/home/fred/git/vtt/internal/platform/x11/overlay.go) shows the overlay immediately with "○ Connecting..." status.
 4. The overlay repositions to the monitor where the mouse pointer is.
 5. [`internal/recorder/recorder.go`](/home/fred/git/vtt/internal/recorder/recorder.go) starts local microphone capture immediately.
 6. The injector captures the active target window after capture has already started so focus can be restored later.
@@ -163,7 +164,7 @@ When the hotkey stops dictation:
 
 After transcription completes:
 
-1. [`internal/injector/injector.go`](/home/fred/git/vtt/internal/injector/injector.go) restores focus to the original window.
+1. [`internal/platform/x11/injector.go`](/home/fred/git/vtt/internal/platform/x11/injector.go) restores focus to the original window.
 2. The transcript is inserted via clipboard paste or direct typing depending on config.
 3. Terminal windows use the configured terminal paste shortcut.
 4. If submit mode is on, `xdotool key --window <id> Return` is sent to the target window.
