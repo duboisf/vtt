@@ -3,6 +3,7 @@ package audio
 import (
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"vocis/internal/sessionlog"
@@ -36,6 +37,14 @@ func (d *Ducker) Duck() {
 		return
 	}
 
+	// If the volume is already at or below the duck level, it's likely
+	// stale from a previous crash that didn't restore. Don't save it.
+	if parseFloat(d.savedVolume) <= d.duckLevel {
+		sessionlog.Warnf("duck: current volume=%s already at duck level, skipping", d.savedVolume)
+		d.savedVolume = ""
+		return
+	}
+
 	if err := exec.Command("wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", fmt.Sprintf("%.2f", d.duckLevel)).Run(); err != nil {
 		sessionlog.Warnf("duck: failed to lower volume: %v", err)
 		d.savedVolume = ""
@@ -56,6 +65,11 @@ func (d *Ducker) Restore() {
 	}
 	sessionlog.Infof("restored audio volume=%s", d.savedVolume)
 	d.savedVolume = ""
+}
+
+func parseFloat(s string) float64 {
+	v, _ := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	return v
 }
 
 // parseVolume extracts the numeric value from wpctl output like "Volume: 0.84".
