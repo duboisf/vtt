@@ -69,14 +69,19 @@ sequenceDiagram
     App->>Overlay: SetFinishingText (full text with newlines)
 
     alt Post-processing enabled & enough words
-        App->>Overlay: SetFinishingPhase("Post-processing")
-        App->>PostProcess: Clean up text (5s timeout)
-        alt User presses Escape
+        App->>Overlay: SetFinishingPhase("Post-processing", firstTokenTimeout)
+        App->>PostProcess: Stream cleanup (two-phase timeout)
+        alt First token arrives
+            PostProcess-->>App: onFirstToken callback
+            App->>Overlay: SetFinishingPhase("Post-processing", remainingTotalTimeout)
+            PostProcess-->>App: Cleaned text
+        else User presses Escape
             App->>App: Skip, use raw text
             App->>Overlay: ShowWarning("Raw text pasted...")
-        else GPT responds
-            PostProcess-->>App: Cleaned text
-        else Timeout
+        else First token timeout
+            PostProcess-->>App: Fall back to raw text
+            App->>Overlay: ShowWarning("Raw text pasted...")
+        else Total timeout
             PostProcess-->>App: Fall back to raw text
             App->>Overlay: ShowWarning("Raw text pasted...")
         end
@@ -151,10 +156,11 @@ When the hotkey stops dictation:
    - Empty commit errors are expected when all audio was consumed by segments and are handled gracefully.
 6. The overlay updates to show the complete transcription text (segments + trailing) with newlines preserved.
 7. If post-processing is enabled and the text has enough words (`postprocess.min_word_count`):
-   - The countdown resets with a "Post-processing" phase label.
-   - The text is sent to `gpt-4o-mini` (configurable) for cleanup with a 5s timeout.
-   - Pressing Escape during this phase skips post-processing and pastes raw text.
-   - If post-processing fails or times out, raw text is pasted with a yellow warning overlay.
+   - The overlay countdown starts with `first_token_timeout_seconds` (default 10s). This is how long we wait for the model to start responding.
+   - When the first token arrives, the countdown extends to the remaining `total_timeout_seconds` (default 15s) for the full streamed response.
+   - If no first token arrives within the first-token timeout, raw text is pasted immediately (the model is likely stuck).
+   - Pressing Escape during either phase skips post-processing and pastes raw text.
+   - If the stream errors or returns empty, raw text is pasted with a yellow warning overlay.
 8. The accumulated segment text plus any trailing transcript is combined and inserted as a single paste.
 9. If submit mode was toggled on, Enter is pressed on the target window.
 10. Audio ducking restores the speaker volume.
@@ -205,18 +211,30 @@ All overlay strings are configurable via the `overlay.*` section of the config f
 When telemetry is enabled, the following OpenTelemetry spans are emitted per dictation session:
 
 - `vocis.dictation` — root span covering the full session lifecycle
-  - `vocis.recorder.start` — PulseAudio client init and stream creation
-  - `vocis.recording.active` — the user speaking (from dictation start to release)
-  - `vocis.openai.connect` — WebSocket dial and realtime session setup (may appear multiple times on retry)
-  - `vocis.recorder.stop` — stream stop and resource cleanup
-  - `vocis.transcribe.finalize` — post-recording finalization
-    - `vocis.transcribe.drain` — drain pending segment finals (250ms window)
-    - `vocis.transcribe.commit` — commit trailing audio buffer to OpenAI
-    - `vocis.transcribe.wait_final` — wait for OpenAI to return the trailing transcript
-  - `vocis.postprocess` — LLM cleanup (with input/output length and skipped attributes)
-  - `vocis.inject` — text insertion into the target window
-    - `vocis.inject.focus` — window activate and modifier key release
-    - `vocis.inject.paste` or `vocis.inject.type` — clipboard paste or xdotool type
+  - Attributes: `target.window_id`, `target.window_class`, `hotkey_mode`, `submit_mode`, `recording.bytes`, `recording.duration`, `transcription.total_chars`, `transcription.live_chars`, `transcription.trailing_chars`
+  - Events (overlay state transitions):
+    - `overlay.connecting` (`attempt`, `max`) — WebSocket connection attempt
+    - `overlay.connected` — connection established
+    - `overlay.submit_mode` (`enabled`) — user toggled submit mode
+    - `overlay.finishing` (`timeout`, `auto_stop`) — recording stopped, entering finish phase
+    - `overlay.phase.wait` (`timeout`) — post-processing wait phase started
+    - `overlay.warning` (`reason`) — warning shown (e.g. `postprocess_skipped`)
+    - `overlay.success` — transcription inserted successfully
+  - Child spans:
+    - `vocis.recorder.start` — PulseAudio client init and stream creation
+    - `vocis.recording.active` — the user speaking (from dictation start to release)
+    - `vocis.openai.connect` — WebSocket dial and realtime session setup (may appear multiple times on retry)
+    - `vocis.recorder.stop` — stream stop and resource cleanup
+    - `vocis.transcribe.finalize` — post-recording finalization
+      - `vocis.transcribe.drain` — drain pending segment finals (250ms window)
+      - `vocis.transcribe.commit` — commit trailing audio buffer to OpenAI
+      - `vocis.transcribe.wait_final` — wait for OpenAI to return the trailing transcript
+    - `vocis.postprocess` — LLM cleanup with two-phase streaming timeout
+      - Attributes: `input.length`, `model`, `output.length`, `skipped`, `postprocess.first_token_timeout_sec`, `postprocess.total_timeout_sec`, `postprocess.error`
+      - Events: `postprocess.streaming_request_sent`, `postprocess.first_token_received` (`elapsed`), `postprocess.first_token_timeout` (`timeout`), `postprocess.streaming_complete` (`elapsed`), `postprocess.empty_response`, `postprocess.cancelled_by_user`
+    - `vocis.inject` — text insertion into the target window
+      - `vocis.inject.focus` — window activate and modifier key release
+      - `vocis.inject.paste` or `vocis.inject.type` — clipboard paste or xdotool type
 
 `vocis.inject.capture_target` runs before the dictation span to identify the active window.
 
@@ -238,23 +256,7 @@ Errors are translated to user-friendly messages in the overlay:
 - Post-processing failure → "Raw text pasted — cleanup was skipped" (yellow warning)
 - Cancellation → "Cancelled — transcription discarded" (yellow warning)
 
-## Logging
-
-Each `serve` session writes a log file under:
-
-- `~/.local/state/vocis/sessions/`
-
-Log levels: `DEBUG`, `INFO`, `WARN`, `ERROR`. Key-value format is used for structured fields (e.g., `duration=5.4s`, `chars=53`, `submit=true`).
-
-The log is the best place to look for:
-
-- realtime session setup failures
-- streaming errors
-- post-processing input/output (DEBUG level)
-- insertion failures
-- hotkey fallback decisions
-- submit mode toggles
-- audio ducking events
+See [`debugging.md`](/home/fred/git/vtt/docs/debugging.md) for logs, tracing (Jaeger API), and diagnostic tips.
 
 ## Verification Standard
 

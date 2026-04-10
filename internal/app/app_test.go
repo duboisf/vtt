@@ -211,6 +211,7 @@ func (o *overlayStub) AnimateChunk(text string) {
 }
 func (o *overlayStub) ShowFinishing(string, string, time.Duration) {}
 func (o *overlayStub) SetFinishingPhase(string, time.Duration)    {}
+func (o *overlayStub) ExtendFinishingPhase(string, time.Duration) {}
 func (o *overlayStub) SetFinishingText(string)                    {}
 func (o *overlayStub) ShowSuccess(text string) {
 	o.successText = text

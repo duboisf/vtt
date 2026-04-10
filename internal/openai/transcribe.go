@@ -44,6 +44,7 @@ type Client struct {
 	cfg          config.OpenAIConfig
 	streaming    config.StreamingConfig
 	client       openaisdk.Client
+	chatStreamer  chatCompletionStreamer
 	dialer       websocket.Dialer
 	websocketURL string
 	writeTimeout time.Duration
@@ -72,10 +73,12 @@ func New(apiKey string, cfg config.OpenAIConfig, streaming config.StreamingConfi
 		opts = append(opts, option.WithProject(project))
 	}
 
+	sdkClient := openaisdk.NewClient(opts...)
 	return &Client{
-		cfg:       cfg,
-		streaming: streaming,
-		client:    openaisdk.NewClient(opts...),
+		cfg:         cfg,
+		streaming:   streaming,
+		client:      sdkClient,
+		chatStreamer: &sdkChatStreamer{completions: &sdkClient.Chat.Completions},
 		dialer: websocket.Dialer{
 			HandshakeTimeout: minDuration(timeout, 5*time.Second),
 		},

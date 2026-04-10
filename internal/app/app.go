@@ -67,6 +67,7 @@ type OverlayUI interface {
 	AnimateChunk(text string)
 	ShowFinishing(body, shortcut string, timeout time.Duration)
 	SetFinishingPhase(label string, timeout time.Duration)
+	ExtendFinishingPhase(label string, timeout time.Duration)
 	SetFinishingText(body string)
 	ShowSuccess(text string)
 	ShowError(err error)
@@ -238,6 +239,9 @@ func (a *App) toggleSubmitMode() {
 		sessionlog.Infof("submit mode disabled")
 		a.overlay.SetSubmitMode(false)
 	}
+	state.span.AddEvent("overlay.submit_mode",
+		trace.WithAttributes(attribute.Bool("enabled", state.submitMode)),
+	)
 }
 
 func (a *App) handleStop(ctx context.Context) {
@@ -293,6 +297,7 @@ func (a *App) startRecordingLocked(ctx context.Context) {
 	recordingSpan.SetAttributes(
 		attribute.String("target.window_id", target.WindowID),
 		attribute.String("target.window_class", target.WindowClass),
+		attribute.String("hotkey_mode", a.cfg.HotkeyMode),
 	)
 	if a.cfg.LogWindowTitle {
 		sessionlog.Infof("starting recording for window=%s class=%s title=%q",
@@ -323,9 +328,16 @@ func (a *App) startRecordingLocked(ctx context.Context) {
 		openai.ConnectCallbacks{
 			OnConnecting: func(attempt, max int) {
 				a.overlay.SetConnecting(attempt, max)
+				recordingSpan.AddEvent("overlay.connecting",
+					trace.WithAttributes(
+						attribute.Int("attempt", attempt),
+						attribute.Int("max", max),
+					),
+				)
 			},
 			OnConnected: func() {
 				a.overlay.SetConnected(target.WindowClass)
+				recordingSpan.AddEvent("overlay.connected")
 			},
 		},
 	)
@@ -356,7 +368,11 @@ func (a *App) stopRecordingLocked(ctx context.Context) {
 	state := a.recording
 	a.recording = nil
 	a.transcribing = true
-	a.overlay.ShowFinishing(state.displayText, a.shortcut, a.estimateFinishTimeout(state))
+	finishTimeout := a.estimateFinishTimeout(state)
+	a.overlay.ShowFinishing(state.displayText, a.shortcut, finishTimeout)
+	state.span.AddEvent("overlay.finishing",
+		trace.WithAttributes(attribute.String("timeout", finishTimeout.String())),
+	)
 	sessionlog.Infof("stopping recording duration=%s",
 		time.Since(state.startedAt).Round(10*time.Millisecond))
 
@@ -416,7 +432,14 @@ func (a *App) forceStopAfter(ctx context.Context, id uint64, maxDuration time.Du
 	a.transcribing = true
 	a.mu.Unlock()
 
-	a.overlay.ShowFinishing(state.displayText, a.shortcut, a.estimateFinishTimeout(state))
+	finishTimeout := a.estimateFinishTimeout(state)
+	a.overlay.ShowFinishing(state.displayText, a.shortcut, finishTimeout)
+	state.span.AddEvent("overlay.finishing",
+		trace.WithAttributes(
+			attribute.String("timeout", finishTimeout.String()),
+			attribute.Bool("auto_stop", true),
+		),
+	)
 	sessionlog.Warnf("auto-stopping recording after timeout")
 	go a.finishRecording(ctx, state)
 }
@@ -537,16 +560,26 @@ func (a *App) finishRecording(ctx context.Context, state *recordingState) {
 
 	postProcessSkipped := false
 	if a.cfg.PostProcess.Enabled {
-		a.overlay.SetFinishingPhase(a.cfg.Overlay.Finishing.PostProcessing, 5*time.Second)
-		_, ppSpan := telemetry.StartSpan(spanCtx, "vocis.postprocess",
+		firstTokenDuration := time.Duration(a.cfg.PostProcess.FirstTokenTimeoutSec) * time.Second
+		totalDuration := time.Duration(a.cfg.PostProcess.TotalTimeoutSec) * time.Second
+		a.overlay.SetFinishingPhase(a.cfg.Overlay.Finishing.PPWait, firstTokenDuration)
+		state.span.AddEvent("overlay.phase.wait",
+			trace.WithAttributes(attribute.String("timeout", firstTokenDuration.String())),
+		)
+		ppSpanCtx, ppSpan := telemetry.StartSpan(spanCtx, "vocis.postprocess",
 			attribute.Int("input.length", len(text)),
 			attribute.String("model", a.cfg.PostProcess.Model),
 		)
 
-		ppCtx, ppCancel := context.WithCancel(spanCtx)
+		ppCtx, ppCancel := context.WithCancel(ppSpanCtx)
 		resultCh := make(chan openai.PostProcessResult, 1)
 		go func() {
-			resultCh <- a.transcribe.PostProcess(ppCtx, a.cfg.PostProcess, text)
+			resultCh <- a.transcribe.PostProcess(ppCtx, a.cfg.PostProcess, text, func() {
+				remaining := totalDuration - firstTokenDuration
+				if remaining > 0 {
+					a.overlay.ExtendFinishingPhase(a.cfg.Overlay.Finishing.PPStream, remaining)
+				}
+			})
 		}()
 
 		var result openai.PostProcessResult
@@ -554,6 +587,7 @@ func (a *App) finishRecording(ctx context.Context, state *recordingState) {
 		case result = <-resultCh:
 		case <-escapeCh:
 			ppCancel()
+			ppSpan.AddEvent("postprocess.cancelled_by_user")
 			sessionlog.Infof("post-processing skipped by user (Escape)")
 			result = openai.PostProcessResult{Text: text, Skipped: true}
 		}
@@ -588,9 +622,12 @@ func (a *App) finishRecording(ctx context.Context, state *recordingState) {
 			sessionlog.Warnf("press enter failed: %v", err)
 		}
 	}
+	state.span.SetAttributes(attribute.Bool("submit_mode", state.submitMode))
 	if postProcessSkipped {
+		state.span.AddEvent("overlay.warning", trace.WithAttributes(attribute.String("reason", "postprocess_skipped")))
 		a.overlay.ShowWarning(a.cfg.Overlay.Warning.PostprocessSkipped)
 	} else {
+		state.span.AddEvent("overlay.success")
 		a.showCompletionSuccess(text)
 	}
 }
@@ -655,6 +692,7 @@ func (a *App) dismissInFlightOverlay() bool {
 	a.transcribing = false
 	a.overlay.ShowWarning(a.cfg.Overlay.Warning.Cancelled)
 	sessionlog.Infof("transcription cancelled by user")
+	// Note: span is ended by the finishRecording defer, which will see the cancelled context.
 	return true
 }
 
@@ -672,6 +710,19 @@ func (a *App) showCompletionError(err error) {
 		return
 	}
 	a.overlay.ShowError(userFacingError(err))
+}
+
+// addOverlayEvent is a convenience for adding overlay state events to a span
+// that may be nil (e.g. before the dictation span is created).
+func addOverlayEvent(span trace.Span, name string, attrs ...attribute.KeyValue) {
+	if span == nil {
+		return
+	}
+	if len(attrs) > 0 {
+		span.AddEvent(name, trace.WithAttributes(attrs...))
+	} else {
+		span.AddEvent(name)
+	}
 }
 
 func isNoSpeechError(err error) bool {

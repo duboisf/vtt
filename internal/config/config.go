@@ -43,10 +43,12 @@ type Config struct {
 }
 
 type PostProcessConfig struct {
-	Enabled      bool   `yaml:"enabled"`
-	Model        string `yaml:"model"`
-	Prompt       string `yaml:"prompt"`
-	MinWordCount int    `yaml:"min_word_count"`
+	Enabled                bool   `yaml:"enabled"`
+	Model                  string `yaml:"model"`
+	Prompt                 string `yaml:"prompt"`
+	MinWordCount           int    `yaml:"min_word_count"`
+	FirstTokenTimeoutSec   int    `yaml:"first_token_timeout_seconds"`
+	TotalTimeoutSec        int    `yaml:"total_timeout_seconds"`
 }
 
 type TelemetryConfig struct {
@@ -126,6 +128,8 @@ type OverlayFinish struct {
 	CancelHint     string `yaml:"cancel_hint"`
 	WrappingUp     string `yaml:"wrapping_up"`
 	PostProcessing string `yaml:"post_processing"`
+	PPWait         string `yaml:"pp_wait"`
+	PPStream       string `yaml:"pp_stream"`
 	TimedOut       string `yaml:"timed_out"`
 	PhaseDone      string `yaml:"phase_done"`
 }
@@ -217,6 +221,8 @@ func Default() Config {
 				CancelHint:     "— press {shortcut} to cancel",
 				WrappingUp:     "Wrapping up",
 				PostProcessing: "Post-processing",
+				PPWait:         "Wait",
+				PPStream:       "Stream",
 				TimedOut:       "{phase} — timed out",
 				PhaseDone:      "done",
 			},
@@ -235,10 +241,12 @@ func Default() Config {
 			},
 		},
 		PostProcess: PostProcessConfig{
-			Enabled:      true,
-			Model:        "gpt-4o-mini",
-			Prompt:       DefaultPostProcessPrompt,
-			MinWordCount: 10,
+			Enabled:              true,
+			Model:                "gpt-4o-mini",
+			Prompt:               DefaultPostProcessPrompt,
+			MinWordCount:         10,
+			FirstTokenTimeoutSec: 10,
+			TotalTimeoutSec:      15,
 		},
 		Telemetry: TelemetryConfig{
 			Enabled:  false,
