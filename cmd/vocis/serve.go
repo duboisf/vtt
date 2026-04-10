@@ -42,7 +42,7 @@ func runServe() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	shutdownTelemetry, err := telemetry.Init(ctx, cfg.Telemetry)
+	shutdownTelemetry, err := telemetry.Init(ctx, cfg.Telemetry, version)
 	if err != nil {
 		return fmt.Errorf("init telemetry: %w", err)
 	}

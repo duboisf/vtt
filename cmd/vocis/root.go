@@ -5,9 +5,10 @@ import (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "vocis",
-	Short: "vocis — voice-to-text for Linux (WOH-kiss)",
-	Long:  `vocis — Latin genitive of vox ("of voice"), pronounced WOH-kiss.
+	Use:     "vocis",
+	Short:   "vocis — voice-to-text for Linux (WOH-kiss)",
+	Version: version,
+	Long:    `vocis — Latin genitive of vox ("of voice"), pronounced WOH-kiss.
 
 A Linux voice-to-text desktop helper. Hold a hotkey, speak, release to
 transcribe and paste into the focused application.`,

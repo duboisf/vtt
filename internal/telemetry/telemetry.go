@@ -30,7 +30,7 @@ func Tracer() trace.Tracer {
 
 // Init sets up the OpenTelemetry TracerProvider with an OTLP/gRPC exporter.
 // Returns a shutdown function that flushes pending spans.
-func Init(ctx context.Context, cfg config.TelemetryConfig) (func(context.Context) error, error) {
+func Init(ctx context.Context, cfg config.TelemetryConfig, version string) (func(context.Context) error, error) {
 	if !cfg.Enabled {
 		return func(context.Context) error { return nil }, nil
 	}
@@ -53,7 +53,7 @@ func Init(ctx context.Context, cfg config.TelemetryConfig) (func(context.Context
 		resource.WithTelemetrySDK(),
 		resource.WithAttributes(
 			attribute.String("service.name", "vocis"),
-			attribute.String("service.version", "0.1.0"),
+			attribute.String("service.version", version),
 		),
 	)
 	if err != nil {
