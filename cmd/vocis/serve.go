@@ -32,6 +32,7 @@ func runServe() error {
 	}
 	defer session.Close()
 
+	sessionlog.Infof("vocis %s", version)
 	sessionlog.Infof("session log: %s", session.Path())
 
 	cfg, path, err := config.Load()
