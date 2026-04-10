@@ -373,11 +373,11 @@ func (o *Overlay) ShowSuccess(text string) {
 	}, true)
 }
 
-func (o *Overlay) ShowWarning(subtitle string) {
+func (o *Overlay) ShowWarning(text string) {
 	o.show(viewState{
-		title:    o.cfg.Warning.Title,
-		subtitle: subtitle,
-		accent:   color.RGBA{R: 251, G: 191, B: 36, A: 255},
+		title:  o.cfg.Warning.Title,
+		body:   text,
+		accent: color.RGBA{R: 251, G: 191, B: 36, A: 255},
 	}, true)
 }
 
