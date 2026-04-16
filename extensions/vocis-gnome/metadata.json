@@ -1,0 +1,7 @@
+{
+  "uuid": "vocis@duboisf.github.io",
+  "name": "Vocis Hotkey Bridge",
+  "description": "Exposes a global ctrl+shift+space accelerator to the vocis dictation daemon over D-Bus, with hold-to-talk press/release semantics. Required for vocis on GNOME Wayland.",
+  "shell-version": ["46"],
+  "url": "https://github.com/duboisf/vocis"
+}

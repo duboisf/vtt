@@ -22,8 +22,15 @@ import (
 
 type Target = platform.Target
 
+// TargetCapture is an optional override for CaptureTarget. When non-nil the
+// injector calls this function instead of shelling out to `xdotool
+// getactivewindow`. Used on Wayland to source the focused window from the
+// vocis-gnome shell extension over D-Bus.
+type TargetCapture func(ctx context.Context) (Target, error)
+
 type Injector struct {
-	cfg config.InsertionConfig
+	cfg     config.InsertionConfig
+	capture TargetCapture
 
 	mu           sync.Mutex
 	restoreTimer *time.Timer
@@ -35,8 +42,8 @@ type commandRunner func(ctx context.Context, name string, args ...string) (strin
 
 var quotedValuePattern = regexp.MustCompile(`"([^"]+)"`)
 
-func NewInjector(cfg config.InsertionConfig, shortcut string) *Injector {
-	inj := &Injector{cfg: cfg}
+func NewInjector(cfg config.InsertionConfig, shortcut string, capture TargetCapture) *Injector {
+	inj := &Injector{cfg: cfg, capture: capture}
 	inj.run = inj.execTrimmed
 	if strings.TrimSpace(shortcut) != "" {
 		if keyNames, err := hotkey.ReleaseKeyNames(shortcut); err == nil {
@@ -54,6 +61,20 @@ func NewInjector(cfg config.InsertionConfig, shortcut string) *Injector {
 func (i *Injector) CaptureTarget(ctx context.Context) (Target, error) {
 	ctx, span := telemetry.StartSpan(ctx, "vocis.inject.capture_target")
 	defer func() { telemetry.EndSpan(span, nil) }()
+
+	if i.capture != nil {
+		target, err := i.capture(ctx)
+		if err != nil {
+			telemetry.EndSpan(span, err)
+			return Target{}, err
+		}
+		span.SetAttributes(
+			attribute.String("window.id", target.WindowID),
+			attribute.String("window.class", target.WindowClass),
+			attribute.String("capture.source", "extension"),
+		)
+		return target, nil
+	}
 
 	windowID, err := i.run(ctx, "xdotool", "getactivewindow")
 	if err != nil {

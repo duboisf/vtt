@@ -3,10 +3,12 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"vocis/internal/config"
+	"vocis/internal/platform/gnome"
 	"vocis/internal/recorder"
 	"vocis/internal/securestore"
 	"vocis/internal/sessionlog"
@@ -76,5 +78,20 @@ func runDoctor() error {
 		fmt.Printf("%-14s missing (%v)\n", "openai-key", err)
 	}
 
+	if isWaylandLikeSession() {
+		if gnome.Available() {
+			fmt.Printf("%-14s ok (vocis-gnome extension responding on %s)\n", "wayland-hk", gnome.BusName)
+		} else {
+			fmt.Printf("%-14s missing (install + enable extensions/vocis-gnome, then log out/in)\n", "wayland-hk")
+		}
+	}
+
 	return nil
+}
+
+func isWaylandLikeSession() bool {
+	if strings.EqualFold(os.Getenv("XDG_SESSION_TYPE"), "wayland") {
+		return true
+	}
+	return os.Getenv("WAYLAND_DISPLAY") != ""
 }

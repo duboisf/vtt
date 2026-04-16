@@ -41,7 +41,10 @@ to a few stable desktop tools for X11 automation:
 - `xclip` for clipboard-based insertion
 - `wpctl` for audio ducking (PipeWire/PulseAudio volume control)
 
-The app currently targets Linux X11. Wayland support is not wired up yet.
+The app currently targets Linux X11. On GNOME Wayland, install the
+`vocis-gnome` shell extension (see [GNOME Wayland](#gnome-wayland)) to get
+working global hotkeys; the overlay and text injection still go through
+XWayland and inherit its limitations.
 
 ## Quick start
 
@@ -113,6 +116,37 @@ Important fields:
 - `postprocess.min_word_count`: skip cleanup for short phrases (default: `10`)
 
 Config is reloaded on each recording start, so changes take effect without restarting.
+
+## GNOME Wayland
+
+Wayland blocks third-party processes from grabbing global hotkeys via X11,
+and GNOME 46 doesn't yet implement the `org.freedesktop.portal.GlobalShortcuts`
+portal. The workaround is a small GNOME Shell extension that registers the
+hotkey via Mutter's API and forwards press/release events to vocis over
+D-Bus.
+
+Install:
+
+```bash
+make install-extension
+# Log out and log back in (gnome-shell only rescans on session start).
+make enable-extension
+```
+
+Verify with `vocis doctor` — the `wayland-hk` line should report `ok`.
+
+The extension is intentionally minimal: it hardcodes `ctrl+shift+space` and
+exposes one D-Bus interface (`io.github.duboisf.Vocis.Hotkey`). Change the
+accelerator in `extension.js` if you use a different shortcut, and keep
+`hotkey:` in `config.yaml` in sync.
+
+Caveats on GNOME Wayland (independent of the extension):
+
+- The overlay window comes from XWayland and may not appear above
+  Wayland-native windows.
+- `xdotool` text injection only works for XWayland-focused windows. For
+  Wayland-native targets (most modern GNOME apps), you'll need a different
+  injection backend — not yet implemented.
 
 ## Secrets
 

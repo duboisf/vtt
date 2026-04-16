@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -12,6 +13,8 @@ import (
 	"vocis/internal/app"
 	"vocis/internal/audio"
 	"vocis/internal/config"
+	"vocis/internal/platform"
+	"vocis/internal/platform/gnome"
 	x11 "vocis/internal/platform/x11"
 	"vocis/internal/sessionlog"
 	"vocis/internal/telemetry"
@@ -62,11 +65,51 @@ func runServe() error {
 	}
 
 	return app.New(cfg, app.Deps{
-		Overlay:  ov,
-		Injector: x11.NewInjector(cfg.Insertion, cfg.Hotkey),
-		Ducker:   audio.NewDucker(cfg.Recording.DuckVolume),
-		RegisterHotkey: func(shortcut string) (app.HotkeySource, error) {
-			return x11.Register(shortcut)
-		},
+		Overlay:        ov,
+		Injector:       x11.NewInjector(cfg.Insertion, cfg.Hotkey, pickTargetCapture()),
+		Ducker:         audio.NewDucker(cfg.Recording.DuckVolume),
+		RegisterHotkey: pickHotkeyRegistrar(),
 	}).Run(ctx)
+}
+
+// pickTargetCapture returns an override for the injector's CaptureTarget on
+// systems where xdotool can't see the focused window. On Wayland we ask the
+// vocis-gnome shell extension. On X11 (or when the extension is missing) we
+// return nil and let the injector use its default xdotool path.
+func pickTargetCapture() x11.TargetCapture {
+	if !isWaylandSession() || !gnome.Available() {
+		return nil
+	}
+	sessionlog.Infof("target capture: vocis-gnome extension")
+	return func(ctx context.Context) (platform.Target, error) {
+		return gnome.FocusedWindow(ctx)
+	}
+}
+
+// pickHotkeyRegistrar selects a global hotkey backend based on the running
+// session. On Wayland, X11 grabs do not see native Wayland keystrokes, so we
+// prefer the vocis-gnome shell extension if it's installed and reachable on
+// the session bus. Falls back to X11 (XGrabKey via XWayland) otherwise — that
+// fallback only works for X11/XWayland focused windows on Wayland sessions.
+func pickHotkeyRegistrar() app.HotkeyRegistrar {
+	if isWaylandSession() {
+		if gnome.Available() {
+			sessionlog.Infof("hotkey backend: vocis-gnome shell extension")
+			return func(shortcut string) (app.HotkeySource, error) {
+				return gnome.Register(shortcut)
+			}
+		}
+		sessionlog.Warnf("hotkey backend: vocis-gnome extension not detected on session bus, falling back to x11/XGrabKey (will not see Wayland-native keys)")
+	}
+	sessionlog.Infof("hotkey backend: x11 (XGrabKey)")
+	return func(shortcut string) (app.HotkeySource, error) {
+		return x11.Register(shortcut)
+	}
+}
+
+func isWaylandSession() bool {
+	if strings.EqualFold(os.Getenv("XDG_SESSION_TYPE"), "wayland") {
+		return true
+	}
+	return os.Getenv("WAYLAND_DISPLAY") != ""
 }
