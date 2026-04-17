@@ -6,7 +6,7 @@ EXTENSION_UUID := vocis@duboisf.github.io
 EXTENSION_SRC  := extensions/vocis-gnome
 EXTENSION_DEST := $(HOME)/.local/share/gnome-shell/extensions/$(EXTENSION_UUID)
 
-.PHONY: build test fmt tidy install-extension uninstall-extension enable-extension
+.PHONY: build test fmt tidy install-extension uninstall-extension enable-extension gnome-shell-nested
 
 build:
 	mkdir -p bin
@@ -44,3 +44,16 @@ enable-extension:
 uninstall-extension:
 	rm -rf $(EXTENSION_DEST)
 	@echo "Removed $(EXTENSION_DEST) (log out/in to clear from gnome-shell)"
+
+# Launch a nested gnome-shell in a window so extension edits can be tested
+# without logging out of the outer session. The nested shell reads extensions
+# from the same ~/.local/share path, so `make install-extension` + this target
+# gives a fast iteration loop:
+#   terminal 1: make install-extension && make gnome-shell-nested
+#   terminal 2: DISPLAY=... gnome-extensions enable $(EXTENSION_UUID)
+#
+# MUTTER_DEBUG_DUMMY_MODE_SPECS sets the nested window size; override at will.
+# To exit the nested shell: close its window.
+gnome-shell-nested:
+	MUTTER_DEBUG_DUMMY_MODE_SPECS=1280x800 \
+		dbus-run-session -- gnome-shell --nested --wayland
