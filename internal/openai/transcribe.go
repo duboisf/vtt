@@ -137,9 +137,9 @@ func (c *Client) StartStream(ctx context.Context, sampleRate, channels int) (*St
 	connectCtx, connectCancel := context.WithTimeout(ctx, connectTimeout)
 	defer connectCancel()
 
-	ctx, connectSpan := telemetry.StartSpan(connectCtx, "vocis.openai.connect",
-		attribute.String("openai.backend", string(c.backendName())),
-		attribute.String("openai.model", c.cfg.Model),
+	ctx, connectSpan := telemetry.StartSpan(connectCtx, "vocis.transcribe.connect",
+		attribute.String("transcribe.backend", string(c.backendName())),
+		attribute.String("transcribe.model", c.cfg.Model),
 		attribute.Int("audio.sample_rate", sampleRate),
 		attribute.Int("audio.channels", channels),
 	)

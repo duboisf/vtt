@@ -64,11 +64,13 @@ func runServe() error {
 		return fmt.Errorf("init overlay: %w", err)
 	}
 
+	registrar, backend := pickHotkeyRegistrar()
 	return app.New(cfg, app.Deps{
 		Overlay:        ov,
 		Injector:       x11.NewInjector(cfg.Insertion, cfg.Hotkey, pickTargetCapture()),
 		Ducker:         audio.NewDucker(cfg.Recording.DuckVolume),
-		RegisterHotkey: pickHotkeyRegistrar(),
+		RegisterHotkey: registrar,
+		HotkeyBackend:  backend,
 	}).Run(ctx)
 }
 
@@ -91,20 +93,23 @@ func pickTargetCapture() x11.TargetCapture {
 // prefer the vocis-gnome shell extension if it's installed and reachable on
 // the session bus. Falls back to X11 (XGrabKey via XWayland) otherwise — that
 // fallback only works for X11/XWayland focused windows on Wayland sessions.
-func pickHotkeyRegistrar() app.HotkeyRegistrar {
+//
+// The returned label ("gnome-extension" or "x11") is passed to app.Deps so
+// the root trace span records which backend a session used.
+func pickHotkeyRegistrar() (app.HotkeyRegistrar, string) {
 	if isWaylandSession() {
 		if gnome.Available() {
 			sessionlog.Infof("hotkey backend: vocis-gnome shell extension")
 			return func(shortcut string) (app.HotkeySource, error) {
 				return gnome.Register(shortcut)
-			}
+			}, "gnome-extension"
 		}
 		sessionlog.Warnf("hotkey backend: vocis-gnome extension not detected on session bus, falling back to x11/XGrabKey (will not see Wayland-native keys)")
 	}
 	sessionlog.Infof("hotkey backend: x11 (XGrabKey)")
 	return func(shortcut string) (app.HotkeySource, error) {
 		return x11.Register(shortcut)
-	}
+	}, "x11"
 }
 
 func isWaylandSession() bool {

@@ -30,6 +30,7 @@ type App struct {
 	apiKey         string
 	ducker         AudioDucker
 	registerHotkey HotkeyRegistrar
+	hotkeyBackend  string
 
 	mu                       sync.Mutex
 	recording                *recordingState
@@ -111,6 +112,9 @@ type Deps struct {
 	Injector       InjectorClient
 	Ducker         AudioDucker
 	RegisterHotkey HotkeyRegistrar
+	// HotkeyBackend is a short label ("x11", "gnome-extension") recorded on
+	// each session's root trace span so Jaeger queries can filter by backend.
+	HotkeyBackend string
 }
 
 func New(cfg config.Config, deps Deps) *App {
@@ -120,6 +124,7 @@ func New(cfg config.Config, deps Deps) *App {
 		injector:       deps.Injector,
 		ducker:         deps.Ducker,
 		registerHotkey: deps.RegisterHotkey,
+		hotkeyBackend:  deps.HotkeyBackend,
 		store:          securestore.New(),
 	}
 }
@@ -281,7 +286,9 @@ func (a *App) startRecordingLocked(ctx context.Context) {
 	a.dismissCompletionOverlay = false
 	a.overlay.ShowListening("", a.cfg.HotkeyMode)
 
-	spanCtx, recordingSpan := telemetry.StartSpan(ctx, "vocis.dictation")
+	spanCtx, recordingSpan := telemetry.StartSpan(ctx, "vocis.dictation",
+		attribute.String("hotkey.backend", a.hotkeyBackend),
+	)
 
 	session, err := a.recorder.Start(spanCtx, a.cfg.Recording)
 	if err != nil {

@@ -6,8 +6,10 @@ import (
 	"fmt"
 
 	"github.com/godbus/dbus/v5"
+	"go.opentelemetry.io/otel/attribute"
 
 	"vocis/internal/platform"
+	"vocis/internal/telemetry"
 )
 
 // FocusedWindow asks the vocis-gnome shell extension for the currently
@@ -22,23 +24,34 @@ import (
 // ErrExtensionNotInstalled — callers can detect that case via errors.Is and
 // fall back to an empty Target.
 func FocusedWindow(ctx context.Context) (platform.Target, error) {
+	ctx, span := telemetry.StartSpan(ctx, "vocis.gnome.get_focused_window")
+	var err error
+	defer func() { telemetry.EndSpan(span, err) }()
+
 	conn, err := dbus.ConnectSessionBus()
 	if err != nil {
-		return platform.Target{}, fmt.Errorf("connect to session bus: %w", err)
+		err = fmt.Errorf("connect to session bus: %w", err)
+		return platform.Target{}, err
 	}
 	defer conn.Close()
 
 	obj := conn.Object(BusName, ObjectPath)
 	call := obj.CallWithContext(ctx, Interface+".GetFocusedWindow", 0)
 	if call.Err != nil {
-		return platform.Target{}, fmt.Errorf("%w: %v", ErrExtensionNotInstalled, call.Err)
+		err = fmt.Errorf("%w: %v", ErrExtensionNotInstalled, call.Err)
+		return platform.Target{}, err
 	}
 
 	var wmClass, title, id string
-	if err := call.Store(&wmClass, &title, &id); err != nil {
-		return platform.Target{}, fmt.Errorf("decode GetFocusedWindow reply: %w", err)
+	if err = call.Store(&wmClass, &title, &id); err != nil {
+		err = fmt.Errorf("decode GetFocusedWindow reply: %w", err)
+		return platform.Target{}, err
 	}
 
+	span.SetAttributes(
+		attribute.String("window.class", wmClass),
+		attribute.String("window.id", id),
+	)
 	return platform.Target{
 		WindowID:    id,
 		WindowClass: wmClass,

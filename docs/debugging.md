@@ -37,8 +37,10 @@ The JSON response contains all spans with their tags (attributes) and logs (even
 
 | Span | What to look for |
 |------|-----------------|
-| `vocis.postprocess` | `skipped` attribute, `first_token_timeout` vs `first_token_received` events, `elapsed` timings |
-| `vocis.transcribe.finalize` | Total finalization time — if this is slow, the "Wrapping up" countdown may expire |
-| `vocis.transcribe.wait_final` | `segment_count`, `trailing.skipped` — whether trailing audio was processed |
-| `vocis.openai.connect` | Connection time — slow means network or API issues |
-| `vocis.inject` | Paste vs type, terminal detection, target window |
+| `vocis.dictation` | Root span. `hotkey.backend` tells you whether the session used `x11` or `gnome-extension`. |
+| `vocis.capture_target` | `capture.source` = `xdotool` (X11 path) or `extension` (gnome path). If the extension path, look for the nested `vocis.gnome.get_focused_window` span with the D-Bus call timing/error. |
+| `vocis.transcribe.connect` | Connection time — slow means network or backend issues. `transcribe.backend` = `openai` or `lemonade`. |
+| `vocis.transcribe.finalize` | Total finalization time — if this is slow, the "Wrapping up" countdown may expire. |
+| `vocis.transcribe.wait_final` | `segment_count`, `trailing.skipped` — whether trailing audio was processed. |
+| `vocis.postprocess` | `skipped` attribute, `first_token_timeout` vs `first_token_received` events, `elapsed` timings. |
+| `vocis.inject` | Paste vs type, terminal detection, target window. |

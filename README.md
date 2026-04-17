@@ -186,9 +186,9 @@ Each dictation session produces one trace with these spans:
 ```
 vocis.dictation                    ← root span (entire session lifecycle)
 ├── vocis.recorder.start           ← PulseAudio init (~10ms)
-├── vocis.inject.capture_target    ← window ID lookup (~6ms)
+├── vocis.capture_target           ← focused-window lookup (~6ms, xdotool or gnome extension)
 ├── vocis.recording.active         ← user speaking (variable)
-├── vocis.openai.connect           ← WebSocket + TLS (~600ms, retries shown separately)
+├── vocis.transcribe.connect       ← WebSocket + TLS (~600ms, retries shown separately)
 ├── vocis.recorder.stop            ← stream flush (~120ms)
 ├── vocis.transcribe.finalize      ← post-recording finalization
 │   ├── vocis.transcribe.drain     ← collect pending segments (250ms window)
@@ -202,7 +202,7 @@ vocis.dictation                    ← root span (entire session lifecycle)
 
 **What to look for:**
 
-- `vocis.openai.connect` with ERROR → network issue connecting to OpenAI
+- `vocis.transcribe.connect` with ERROR → network issue connecting to the transcription backend
 - `vocis.transcribe.commit` with `commit.skipped=true` → all audio consumed by segments (normal)
 - `vocis.transcribe.wait_final` with `trailing.skipped=true` → no trailing audio to transcribe (normal)
 - `vocis.postprocess` with `skipped=true` → post-processing failed or was cancelled
@@ -241,7 +241,7 @@ Key log patterns:
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| Overlay appears but nothing happens | WebSocket connect failed | Check Jaeger trace for `vocis.openai.connect` error |
+| Overlay appears but nothing happens | WebSocket connect failed | Check Jaeger trace for `vocis.transcribe.connect` error |
 | Text pasted in wrong window | Focus shifted during finalization | Target window ID is logged; check if xdotool activated it |
 | Post-processing too aggressive | Prompt removes too much | Edit `postprocess.prompt` in config |
 | Mic volume keeps dropping | External app adjusting gain | Check `wpctl status` for Zoom or other apps |

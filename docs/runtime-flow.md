@@ -211,7 +211,7 @@ All overlay strings are configurable via the `overlay.*` section of the config f
 When telemetry is enabled, the following OpenTelemetry spans are emitted per dictation session:
 
 - `vocis.dictation` — root span covering the full session lifecycle
-  - Attributes: `target.window_id`, `target.window_class`, `hotkey_mode`, `submit_mode`, `recording.bytes`, `recording.duration`, `transcription.total_chars`, `transcription.live_chars`, `transcription.trailing_chars`
+  - Attributes: `hotkey.backend` (`x11` or `gnome-extension`), `target.window_id`, `target.window_class`, `hotkey_mode`, `submit_mode`, `recording.bytes`, `recording.duration`, `transcription.total_chars`, `transcription.live_chars`, `transcription.trailing_chars`
   - Events (overlay state transitions):
     - `overlay.connecting` (`attempt`, `max`) — WebSocket connection attempt
     - `overlay.connected` — connection established
@@ -221,22 +221,21 @@ When telemetry is enabled, the following OpenTelemetry spans are emitted per dic
     - `overlay.warning` (`reason`) — warning shown (e.g. `postprocess_skipped`)
     - `overlay.success` — transcription inserted successfully
   - Child spans:
+    - `vocis.capture_target` — identify the focused window. `capture.source` = `xdotool` or `extension`; the extension path nests `vocis.gnome.get_focused_window` for the D-Bus call.
     - `vocis.recorder.start` — PulseAudio client init and stream creation
     - `vocis.recording.active` — the user speaking (from dictation start to release)
-    - `vocis.openai.connect` — WebSocket dial and realtime session setup (may appear multiple times on retry)
+    - `vocis.transcribe.connect` — WebSocket dial and session setup (may appear multiple times on retry). `transcribe.backend` = `openai` or `lemonade`.
     - `vocis.recorder.stop` — stream stop and resource cleanup
     - `vocis.transcribe.finalize` — post-recording finalization
       - `vocis.transcribe.drain` — drain pending segment finals (250ms window)
-      - `vocis.transcribe.commit` — commit trailing audio buffer to OpenAI
-      - `vocis.transcribe.wait_final` — wait for OpenAI to return the trailing transcript
+      - `vocis.transcribe.commit` — commit trailing audio buffer to the backend
+      - `vocis.transcribe.wait_final` — wait for the backend to return the trailing transcript
     - `vocis.postprocess` — LLM cleanup with two-phase streaming timeout
       - Attributes: `input.length`, `model`, `output.length`, `skipped`, `postprocess.first_token_timeout_sec`, `postprocess.total_timeout_sec`, `postprocess.error`
       - Events: `postprocess.streaming_request_sent`, `postprocess.first_token_received` (`elapsed`), `postprocess.first_token_timeout` (`timeout`), `postprocess.streaming_complete` (`elapsed`), `postprocess.empty_response`, `postprocess.cancelled_by_user`
     - `vocis.inject` — text insertion into the target window
       - `vocis.inject.focus` — window activate and modifier key release
       - `vocis.inject.paste` or `vocis.inject.type` — clipboard paste or xdotool type
-
-`vocis.inject.capture_target` runs before the dictation span to identify the active window.
 
 ## Short Recordings
 

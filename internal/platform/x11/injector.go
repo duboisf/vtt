@@ -59,7 +59,7 @@ func NewInjector(cfg config.InsertionConfig, shortcut string, capture TargetCapt
 }
 
 func (i *Injector) CaptureTarget(ctx context.Context) (Target, error) {
-	ctx, span := telemetry.StartSpan(ctx, "vocis.inject.capture_target")
+	ctx, span := telemetry.StartSpan(ctx, "vocis.capture_target")
 	defer func() { telemetry.EndSpan(span, nil) }()
 
 	if i.capture != nil {
@@ -69,12 +69,14 @@ func (i *Injector) CaptureTarget(ctx context.Context) (Target, error) {
 			return Target{}, err
 		}
 		span.SetAttributes(
+			attribute.String("capture.source", "extension"),
 			attribute.String("window.id", target.WindowID),
 			attribute.String("window.class", target.WindowClass),
-			attribute.String("capture.source", "extension"),
 		)
 		return target, nil
 	}
+
+	span.SetAttributes(attribute.String("capture.source", "xdotool"))
 
 	windowID, err := i.run(ctx, "xdotool", "getactivewindow")
 	if err != nil {
