@@ -27,6 +27,7 @@ func runSTT(args []string) error {
 	timeoutMs := fs.Int("timeout_ms", 30000, "safety ceiling for Collect; real exit is when every speech_started has a matching completed")
 	debug := fs.Bool("debug", false, "dump raw JSON for every WS frame")
 	live := fs.Bool("live", false, "render interim deltas in-place on stderr (subtitle-style); expects a terminal")
+	play := fs.Bool("play", false, "mirror each audio chunk to the local PulseAudio sink so you hear what's being sent")
 
 	// TTS-only flags (ignored for wav/mic) — kept here so `stt text` is
 	// a one-liner without a second level of subcommand parsing.
@@ -60,6 +61,7 @@ func runSTT(args []string) error {
 		VADms:      *silenceMs,
 		Log:        os.Stderr, // protocol events → stderr
 		Transcript: os.Stdout, // each completed turn → stdout, immediately
+		Play:       *play,
 		Debug:      *debug,
 	}
 	if *live {

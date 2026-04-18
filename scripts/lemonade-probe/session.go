@@ -35,6 +35,7 @@ type Config struct {
 	Log        io.Writer // event log destination; nil → silent
 	Transcript io.Writer // receives each turn's text the moment `completed` arrives (one line per turn); nil → silent
 	Live       io.Writer // receives interim deltas in-place via \r + ANSI clear-to-EOL; nil → silent. Expects a terminal.
+	Play       bool      // mirror each audio chunk to the local PulseAudio sink (16 kHz mono)
 	Debug      bool      // dump raw JSON for every WS frame
 }
 
@@ -62,6 +63,7 @@ type Session struct {
 
 	conn       *websocket.Conn
 	eventsDone chan struct{}
+	player     *Player // non-nil only when cfg.Play is true
 
 	mu     sync.Mutex
 	result Result // accumulated state — snapshot() returns a copy
@@ -118,6 +120,17 @@ func (s *Session) Start(ctx context.Context) error {
 	s.conn = conn
 	s.eventsDone = make(chan struct{})
 	go s.readEvents()
+
+	if s.cfg.Play {
+		// 16 kHz matches what we send to Lemonade after resampling — so
+		// the user hears exactly what the model hears, useful for
+		// catching loudness / clipping issues.
+		player, err := NewPlayer(16000)
+		if err != nil {
+			return fmt.Errorf("open playback: %w", err)
+		}
+		s.player = player
+	}
 
 	session := map[string]any{}
 	if s.cfg.Model != "" {
@@ -194,8 +207,13 @@ func (s *Session) Collect(ctx context.Context, maxWait time.Duration) (Result, e
 	}
 }
 
-// Close tears down the WS. Safe to call multiple times.
+// Close tears down the WS and the playback stream (if any). Safe to
+// call multiple times.
 func (s *Session) Close() error {
+	if s.player != nil {
+		s.player.Close()
+		s.player = nil
+	}
 	if s.conn != nil {
 		_ = s.conn.WriteControl(
 			websocket.CloseMessage,
@@ -245,6 +263,12 @@ func (s *Session) streamChunks(samples []int16, label string) error {
 			"audio": b64,
 		}); err != nil {
 			return fmt.Errorf("append %s: %w", label, err)
+		}
+		// Mirror the same chunk to the local sink so the user hears
+		// what's being sent. Only audio chunks are played — silence
+		// padding (label="pad_silence") is skipped, no point on speakers.
+		if s.player != nil && label == "audio" {
+			s.player.Write(samples[offset:end])
 		}
 		time.Sleep(chunkMs * time.Millisecond)
 	}
