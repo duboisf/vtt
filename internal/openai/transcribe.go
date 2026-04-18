@@ -123,6 +123,7 @@ type Stream struct {
 	// to keep the trace readable.
 	sessionSpan  trace.Span
 	sessionStart time.Time
+	targetRate   int
 
 	writeMu   sync.Mutex
 	closeOnce sync.Once
@@ -136,6 +137,58 @@ type Stream struct {
 	partial   string
 	activeID  string
 	partials  map[string]string
+
+	// statsMu protects all stats fields below. They feed:
+	//   - the session span's closing attributes (counts/totals)
+	//   - PreCommitContext() which the commit span queries
+	//   - PostCommitStats() which the wait_final span queries
+	statsMu              sync.Mutex
+	inboundCounts        map[string]int
+	outboundCounts       map[string]int
+	appendBytes          int64
+	lastInboundType      string
+	lastInboundAt        time.Time
+	firstSpeechStartedAt time.Time
+	lastSpeechStoppedAt  time.Time
+	speechStartedCount   int
+	speechStoppedCount   int
+	commitAt             time.Time
+	firstPostCommitType  string
+	firstPostCommitAt    time.Time
+	firstPostCommitDelta string
+	deltaCountPostCommit int
+	completedText        string
+	completedAt          time.Time
+}
+
+// PreCommitContext is the snapshot of inbound state at the moment the caller
+// is about to send input_audio_buffer.commit. It lets the commit span answer
+// "did Lemonade's VAD already fire speech_stopped?" without having to crawl
+// span events by hand.
+type PreCommitContext struct {
+	LastInboundType         string
+	MsSinceLastInbound      int64
+	SpeechStoppedSeenBefore bool
+	MsSinceSpeechStopped    int64
+	AppendBytes             int64
+	AppendApproxMs          int64
+}
+
+// PostCommitStats summarizes everything that arrived between commit and the
+// completed/failed/timeout terminal event. The wait_final span attaches it
+// so a single trace tells you whether the commit→completed gap is the
+// redundant "second Whisper inference" (delta_eq_completed=true) or
+// something else.
+type PostCommitStats struct {
+	FirstEventType    string
+	FirstEventMs      int64
+	FirstDeltaText    string
+	FirstDeltaTextLen int
+	CompletedText     string
+	CompletedTextLen  int
+	DeltaEqCompleted  bool
+	DeltaCount        int
+	CompletedMs       int64
 }
 
 func (c *Client) StartStream(ctx context.Context, sampleRate, channels int) (*Stream, error) {
@@ -169,14 +222,17 @@ func (c *Client) StartStream(ctx context.Context, sampleRate, channels int) (*St
 	connectSpan.AddEvent("websocket.dialed")
 
 	stream := &Stream{
-		conn:         conn,
-		encoder:      newPCMEncoder(sampleRate, c.transport.SampleRate(), channels),
-		writeTimeout: c.writeTimeout,
-		sessionSpan:  sessionSpan,
-		sessionStart: time.Now(),
-		readyCh:      make(chan error, 1),
-		events:       make(chan StreamEvent, 16),
-		readDone:     make(chan struct{}),
+		conn:           conn,
+		encoder:        newPCMEncoder(sampleRate, c.transport.SampleRate(), channels),
+		writeTimeout:   c.writeTimeout,
+		sessionSpan:    sessionSpan,
+		sessionStart:   time.Now(),
+		targetRate:     c.transport.SampleRate(),
+		readyCh:        make(chan error, 1),
+		events:         make(chan StreamEvent, 16),
+		readDone:       make(chan struct{}),
+		inboundCounts:  make(map[string]int),
+		outboundCounts: make(map[string]int),
 	}
 	go stream.readLoop()
 
@@ -204,15 +260,25 @@ func (s *Stream) Append(ctx context.Context, samples []int16) error {
 	if len(payload) == 0 {
 		return nil
 	}
-	return s.sendJSON(ctx, map[string]any{
+	if err := s.sendJSON(ctx, map[string]any{
 		"type":  "input_audio_buffer.append",
 		"audio": base64.StdEncoding.EncodeToString(payload),
-	})
+	}); err != nil {
+		return err
+	}
+	s.statsMu.Lock()
+	s.appendBytes += int64(len(payload))
+	s.outboundCounts["input_audio_buffer.append"]++
+	s.statsMu.Unlock()
+	return nil
 }
 
 func (s *Stream) Commit(ctx context.Context) error {
 	err := s.sendJSON(ctx, map[string]any{"type": "input_audio_buffer.commit"})
 	if err == nil {
+		s.statsMu.Lock()
+		s.commitAt = time.Now()
+		s.statsMu.Unlock()
 		s.recordOutbound("input_audio_buffer.commit")
 	}
 	return err
@@ -236,6 +302,7 @@ func (s *Stream) Close() error {
 		)
 		err = s.conn.Close()
 		if s.sessionSpan != nil {
+			s.setSessionSummaryAttrs()
 			telemetry.EndSpan(s.sessionSpan, nil)
 			s.sessionSpan = nil
 		}
@@ -244,22 +311,98 @@ func (s *Stream) Close() error {
 }
 
 // recordInbound attaches a span event for a realtime message received from
-// the backend. Called from readLoop. Audio-buffer state and transcription
-// messages are recorded; unknown events are surfaced under a shared name so
-// they're distinguishable from ones we handle.
-func (s *Stream) recordInbound(msgType string) {
-	if s.sessionSpan == nil {
-		return
-	}
-	s.sessionSpan.AddEvent("realtime.inbound", trace.WithAttributes(
+// the backend AND updates the in-stream stats that PreCommitContext /
+// PostCommitStats expose to commit / wait_final spans.
+//
+// Span event attrs:
+//   - message.type
+//   - elapsed (since session start)
+//   - item_id (when present — lets you correlate which transcription turn)
+//   - delta.text / delta.text_len (for delta events; text truncated to 80 chars)
+//   - transcript.text / transcript.text_len (for completed events)
+//   - audio_start_ms / audio_end_ms (for speech_started / speech_stopped — Lemonade's VAD timestamps)
+func (s *Stream) recordInbound(msg jsonMessage) {
+	now := time.Now()
+	msgType := msg.Type()
+
+	attrs := []attribute.KeyValue{
 		attribute.String("message.type", msgType),
-		attribute.String("elapsed", time.Since(s.sessionStart).Round(time.Millisecond).String()),
-	))
+		attribute.String("elapsed", now.Sub(s.sessionStart).Round(time.Millisecond).String()),
+	}
+	if id, ok := msg["item_id"].(string); ok && id != "" {
+		attrs = append(attrs, attribute.String("item_id", id))
+	}
+
+	switch msgType {
+	case "conversation.item.input_audio_transcription.delta":
+		if d, ok := msg["delta"].(string); ok {
+			attrs = append(attrs,
+				attribute.Int("delta.text_len", len(d)),
+				attribute.String("delta.text", truncate(d, 80)),
+			)
+		}
+	case "conversation.item.input_audio_transcription.completed":
+		if t, ok := msg["transcript"].(string); ok {
+			attrs = append(attrs,
+				attribute.Int("transcript.text_len", len(t)),
+				attribute.String("transcript.text", truncate(t, 80)),
+			)
+		}
+	case "input_audio_buffer.speech_started":
+		if v, ok := numericField(msg, "audio_start_ms"); ok {
+			attrs = append(attrs, attribute.Int64("audio_start_ms", v))
+		}
+	case "input_audio_buffer.speech_stopped":
+		if v, ok := numericField(msg, "audio_end_ms"); ok {
+			attrs = append(attrs, attribute.Int64("audio_end_ms", v))
+		}
+	}
+
+	if s.sessionSpan != nil {
+		s.sessionSpan.AddEvent("realtime.inbound", trace.WithAttributes(attrs...))
+	}
+
+	s.statsMu.Lock()
+	s.inboundCounts[msgType]++
+	s.lastInboundType = msgType
+	s.lastInboundAt = now
+	switch msgType {
+	case "input_audio_buffer.speech_started":
+		s.speechStartedCount++
+		if s.firstSpeechStartedAt.IsZero() {
+			s.firstSpeechStartedAt = now
+		}
+	case "input_audio_buffer.speech_stopped":
+		s.speechStoppedCount++
+		s.lastSpeechStoppedAt = now
+	case "conversation.item.input_audio_transcription.delta":
+		if !s.commitAt.IsZero() && now.After(s.commitAt) {
+			s.deltaCountPostCommit++
+			if s.firstPostCommitType == "" {
+				s.firstPostCommitType = "delta"
+				s.firstPostCommitAt = now
+			}
+			if d, ok := msg["delta"].(string); ok && d != "" && s.firstPostCommitDelta == "" {
+				s.firstPostCommitDelta = d
+			}
+		}
+	case "conversation.item.input_audio_transcription.completed":
+		if !s.commitAt.IsZero() && s.firstPostCommitType == "" {
+			s.firstPostCommitType = "completed"
+			s.firstPostCommitAt = now
+		}
+		if t, ok := msg["transcript"].(string); ok {
+			s.completedText = t
+		}
+		s.completedAt = now
+	}
+	s.statsMu.Unlock()
 }
 
 // recordOutbound mirrors recordInbound for messages vocis sends to the
-// backend. input_audio_buffer.append is intentionally skipped — it fires
-// too often to be useful in a span.
+// backend. input_audio_buffer.append is intentionally skipped at the span
+// level (too high-rate to be readable) but we still tally it in
+// outboundCounts / appendBytes so the session-end summary captures it.
 func (s *Stream) recordOutbound(msgType string) {
 	if s.sessionSpan == nil {
 		return
@@ -268,6 +411,116 @@ func (s *Stream) recordOutbound(msgType string) {
 		attribute.String("message.type", msgType),
 		attribute.String("elapsed", time.Since(s.sessionStart).Round(time.Millisecond).String()),
 	))
+	s.statsMu.Lock()
+	s.outboundCounts[msgType]++
+	s.statsMu.Unlock()
+}
+
+// PreCommitContext returns the inbound state right before commit, used by
+// the commit span to record whether VAD already fired speech_stopped (so
+// "fast vs slow path" is visible in a single attribute).
+func (s *Stream) PreCommitContext() PreCommitContext {
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	now := time.Now()
+	ctx := PreCommitContext{
+		LastInboundType: s.lastInboundType,
+		AppendBytes:     s.appendBytes,
+		// 16-bit PCM mono → 2 bytes per sample. Total samples = bytes/2.
+		// Audio ms = samples * 1000 / sample_rate.
+		AppendApproxMs: 0,
+	}
+	if s.targetRate > 0 {
+		ctx.AppendApproxMs = (s.appendBytes / 2) * 1000 / int64(s.targetRate)
+	}
+	if !s.lastInboundAt.IsZero() {
+		ctx.MsSinceLastInbound = now.Sub(s.lastInboundAt).Milliseconds()
+	}
+	if !s.lastSpeechStoppedAt.IsZero() {
+		ctx.SpeechStoppedSeenBefore = true
+		ctx.MsSinceSpeechStopped = now.Sub(s.lastSpeechStoppedAt).Milliseconds()
+	}
+	return ctx
+}
+
+// PostCommitStats returns the post-commit timeline. Call after waitForFinal
+// returns (success, timeout, or error). delta_eq_completed answers the
+// "could we skip waiting for completed?" question directly.
+func (s *Stream) PostCommitStats() PostCommitStats {
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	stats := PostCommitStats{
+		FirstEventType:    s.firstPostCommitType,
+		FirstDeltaText:    truncate(s.firstPostCommitDelta, 80),
+		FirstDeltaTextLen: len(s.firstPostCommitDelta),
+		CompletedText:     truncate(s.completedText, 80),
+		CompletedTextLen:  len(s.completedText),
+		DeltaCount:        s.deltaCountPostCommit,
+	}
+	if s.firstPostCommitDelta != "" && s.completedText != "" {
+		stats.DeltaEqCompleted = strings.TrimSpace(s.firstPostCommitDelta) == strings.TrimSpace(s.completedText)
+	}
+	if !s.commitAt.IsZero() {
+		if !s.firstPostCommitAt.IsZero() {
+			stats.FirstEventMs = s.firstPostCommitAt.Sub(s.commitAt).Milliseconds()
+		}
+		if !s.completedAt.IsZero() {
+			stats.CompletedMs = s.completedAt.Sub(s.commitAt).Milliseconds()
+		}
+	}
+	return stats
+}
+
+// SetSessionSummaryAttrs writes the running counts/totals onto the session
+// span. Called by Close() so traces show per-message-type counts without
+// having to walk every span event.
+func (s *Stream) setSessionSummaryAttrs() {
+	if s.sessionSpan == nil {
+		return
+	}
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	attrs := []attribute.KeyValue{
+		attribute.Int64("session.duration_ms", time.Since(s.sessionStart).Milliseconds()),
+		attribute.Int("inbound.deltas_count", s.inboundCounts["conversation.item.input_audio_transcription.delta"]),
+		attribute.Int("inbound.completed_count", s.inboundCounts["conversation.item.input_audio_transcription.completed"]),
+		attribute.Int("inbound.speech_started_count", s.speechStartedCount),
+		attribute.Int("inbound.speech_stopped_count", s.speechStoppedCount),
+		attribute.Int("inbound.committed_count", s.inboundCounts["input_audio_buffer.committed"]),
+		attribute.Int("outbound.append_count", s.outboundCounts["input_audio_buffer.append"]),
+		attribute.Int64("outbound.append_bytes", s.appendBytes),
+	}
+	if s.targetRate > 0 {
+		attrs = append(attrs, attribute.Int64("outbound.append_total_audio_ms", (s.appendBytes/2)*1000/int64(s.targetRate)))
+	}
+	if !s.firstSpeechStartedAt.IsZero() {
+		attrs = append(attrs, attribute.Int64("session.first_speech_started_at_ms", s.firstSpeechStartedAt.Sub(s.sessionStart).Milliseconds()))
+	}
+	s.sessionSpan.SetAttributes(attrs...)
+}
+
+// truncate returns at most max bytes of s with a trailing "…" if it was
+// truncated. Span events should not carry full transcripts (could be
+// arbitrarily long); 80 chars is enough to recognize the text at a glance.
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
+}
+
+// numericField pulls an integer-ish value from a JSON-decoded map. JSON
+// numbers come in as float64; some Lemonade events also use ints.
+func numericField(m jsonMessage, key string) (int64, bool) {
+	switch v := m[key].(type) {
+	case float64:
+		return int64(v), true
+	case int64:
+		return v, true
+	case int:
+		return int64(v), true
+	}
+	return 0, false
 }
 
 func (s *Stream) waitReady(ctx context.Context) error {
@@ -424,7 +677,15 @@ func (s *DictationSession) collectTrailing(ctx context.Context, stream *Stream) 
 	}
 
 	// Phase 2: commit trailing audio and wait for the final transcript.
-	_, commitSpan := telemetry.StartSpan(ctx, "vocis.transcribe.commit")
+	pre := stream.PreCommitContext()
+	_, commitSpan := telemetry.StartSpan(ctx, "vocis.transcribe.commit",
+		attribute.Int64("commit.pending_audio_bytes", pre.AppendBytes),
+		attribute.Int64("commit.pending_audio_ms", pre.AppendApproxMs),
+		attribute.String("commit.last_inbound_type", pre.LastInboundType),
+		attribute.Int64("commit.ms_since_last_inbound", pre.MsSinceLastInbound),
+		attribute.Bool("commit.speech_stopped_seen_before_commit", pre.SpeechStoppedSeenBefore),
+		attribute.Int64("commit.ms_since_speech_stopped", pre.MsSinceSpeechStopped),
+	)
 	err = stream.Commit(ctx)
 	if err != nil && s.canSkipEmptyCommit(err, stream) {
 		commitSpan.SetAttributes(attribute.Bool("commit.skipped", true))
@@ -441,6 +702,7 @@ func (s *DictationSession) collectTrailing(ctx context.Context, stream *Stream) 
 		attribute.Int("segment_count", s.segmentCountValue()),
 	)
 	finalText, err := s.waitForFinal(ctx)
+	addPostCommitAttrs(waitSpan, stream.PostCommitStats())
 	if err != nil && (s.canSkipTrailingTimeout(err, stream) || s.canSkipEmptyCommit(err, stream)) {
 		waitSpan.SetAttributes(attribute.Bool("trailing.skipped", true))
 		telemetry.EndSpan(waitSpan, nil)
@@ -452,6 +714,26 @@ func (s *DictationSession) collectTrailing(ctx context.Context, stream *Stream) 
 	}
 
 	return FinalizeResult{Text: appendSegmentText(text, finalText)}, nil
+}
+
+// addPostCommitAttrs attaches the post-commit timeline to the wait_final
+// span. Pulled out of collectTrailing so the same logic can be reused on
+// success, timeout, and error paths.
+func addPostCommitAttrs(span trace.Span, stats PostCommitStats) {
+	if span == nil {
+		return
+	}
+	span.SetAttributes(
+		attribute.String("wait_final.first_event_type", stats.FirstEventType),
+		attribute.Int64("wait_final.first_event_ms", stats.FirstEventMs),
+		attribute.Int("wait_final.first_delta_text_len", stats.FirstDeltaTextLen),
+		attribute.String("wait_final.first_delta_text", stats.FirstDeltaText),
+		attribute.Int("wait_final.completed_text_len", stats.CompletedTextLen),
+		attribute.String("wait_final.completed_text", stats.CompletedText),
+		attribute.Bool("wait_final.delta_eq_completed", stats.DeltaEqCompleted),
+		attribute.Int("wait_final.delta_count", stats.DeltaCount),
+		attribute.Int64("wait_final.completed_ms", stats.CompletedMs),
+	)
 }
 
 // ---------------------------------------------------------------------------
@@ -911,7 +1193,7 @@ func (s *Stream) readLoop() {
 		}
 
 		msgType := raw.Type()
-		s.recordInbound(msgType)
+		s.recordInbound(raw)
 		switch msgType {
 		case "session.created", "session.updated":
 			sessionlog.Debugf("realtime: %s", msgType)
