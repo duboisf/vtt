@@ -332,12 +332,11 @@ func (a *App) startRecordingLocked(ctx context.Context) {
 		span:      recordingSpan,
 		spanCtx:   spanCtx,
 	}
-	dictation, err := a.transcribe.StartDictation(
-		recordCtx,
-		a.cfg.Recording.SampleRate,
-		a.cfg.Recording.Channels,
-		session.Samples(),
-		openai.ConnectCallbacks{
+	dictation, err := a.transcribe.StartDictation(recordCtx, openai.DictationOpts{
+		SampleRate: a.cfg.Recording.SampleRate,
+		Channels:   a.cfg.Recording.Channels,
+		Samples:    session.Samples(),
+		Callbacks: openai.ConnectCallbacks{
 			OnConnecting: func(attempt, max int) {
 				a.overlay.SetConnecting(attempt, max)
 				recordingSpan.AddEvent("overlay.connecting",
@@ -352,7 +351,7 @@ func (a *App) startRecordingLocked(ctx context.Context) {
 				recordingSpan.AddEvent("overlay.connected")
 			},
 		},
-	)
+	})
 	if err != nil {
 		cancel()
 		_ = session.Stop(context.Background())

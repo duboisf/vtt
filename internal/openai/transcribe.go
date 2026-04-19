@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -138,27 +139,41 @@ type Stream struct {
 	activeID  string
 	partials  map[string]string
 
-	// statsMu protects all stats fields below. They feed:
-	//   - the session span's closing attributes (counts/totals)
-	//   - PreCommitContext() which the commit span queries
-	//   - PostCommitStats() which the wait_final span queries
-	statsMu              sync.Mutex
-	inboundCounts        map[string]int
-	outboundCounts       map[string]int
-	appendBytes          int64
-	lastInboundType      string
-	lastInboundAt        time.Time
-	firstSpeechStartedAt time.Time
-	lastSpeechStoppedAt  time.Time
-	speechStartedCount   int
-	speechStoppedCount   int
-	commitAt             time.Time
-	firstPostCommitType  string
-	firstPostCommitAt    time.Time
-	firstPostCommitDelta string
-	deltaCountPostCommit int
-	completedText        string
-	completedAt          time.Time
+	// statsMu guards the entire stats value. Counts/totals here feed the
+	// session-span closing attributes plus the PreCommitContext /
+	// PostCommitStats projections used by the commit / wait_final spans.
+	statsMu sync.Mutex
+	stats   Stats
+}
+
+// Stats accumulates everything the session needs to report at the end of
+// a dictation: per-message counts, audio totals, and the timestamps that
+// drive PreCommitContext / PostCommitStats. Mutated only via Stream
+// helpers under statsMu; snapshots are returned by value.
+type Stats struct {
+	InboundCounts        map[string]int
+	OutboundCounts       map[string]int
+	AppendBytes          int64
+	LastInboundType      string
+	LastInboundAt        time.Time
+	FirstSpeechStartedAt time.Time
+	LastSpeechStoppedAt  time.Time
+	SpeechStartedCount   int
+	SpeechStoppedCount   int
+	CommitAt             time.Time
+	FirstPostCommitType  string
+	FirstPostCommitAt    time.Time
+	FirstPostCommitDelta string
+	DeltaCountPostCommit int
+	CompletedText        string
+	CompletedAt          time.Time
+}
+
+func newStats() Stats {
+	return Stats{
+		InboundCounts:  make(map[string]int),
+		OutboundCounts: make(map[string]int),
+	}
 }
 
 // PreCommitContext is the snapshot of inbound state at the moment the caller
@@ -222,17 +237,16 @@ func (c *Client) StartStream(ctx context.Context, sampleRate, channels int) (*St
 	connectSpan.AddEvent("websocket.dialed")
 
 	stream := &Stream{
-		conn:           conn,
-		encoder:        newPCMEncoder(sampleRate, c.transport.SampleRate(), channels),
-		writeTimeout:   c.writeTimeout,
-		sessionSpan:    sessionSpan,
-		sessionStart:   time.Now(),
-		targetRate:     c.transport.SampleRate(),
-		readyCh:        make(chan error, 1),
-		events:         make(chan StreamEvent, 16),
-		readDone:       make(chan struct{}),
-		inboundCounts:  make(map[string]int),
-		outboundCounts: make(map[string]int),
+		conn:         conn,
+		encoder:      newPCMEncoder(sampleRate, c.transport.SampleRate(), channels),
+		writeTimeout: c.writeTimeout,
+		sessionSpan:  sessionSpan,
+		sessionStart: time.Now(),
+		targetRate:   c.transport.SampleRate(),
+		readyCh:      make(chan error, 1),
+		events:       make(chan StreamEvent, 16),
+		readDone:     make(chan struct{}),
+		stats:        newStats(),
 	}
 	go stream.readLoop()
 
@@ -267,8 +281,8 @@ func (s *Stream) Append(ctx context.Context, samples []int16) error {
 		return err
 	}
 	s.statsMu.Lock()
-	s.appendBytes += int64(len(payload))
-	s.outboundCounts["input_audio_buffer.append"]++
+	s.stats.AppendBytes += int64(len(payload))
+	s.stats.OutboundCounts["input_audio_buffer.append"]++
 	s.statsMu.Unlock()
 	return nil
 }
@@ -277,7 +291,7 @@ func (s *Stream) Commit(ctx context.Context) error {
 	err := s.sendJSON(ctx, map[string]any{"type": "input_audio_buffer.commit"})
 	if err == nil {
 		s.statsMu.Lock()
-		s.commitAt = time.Now()
+		s.stats.CommitAt = time.Now()
 		s.statsMu.Unlock()
 		s.recordOutbound("input_audio_buffer.commit")
 	}
@@ -310,29 +324,32 @@ func (s *Stream) Close() error {
 	return err
 }
 
-// recordInbound attaches a span event for a realtime message received from
-// the backend AND updates the in-stream stats that PreCommitContext /
-// PostCommitStats expose to commit / wait_final spans.
-//
-// Span event attrs:
-//   - message.type
-//   - elapsed (since session start)
-//   - item_id (when present — lets you correlate which transcription turn)
-//   - delta.text / delta.text_len (for delta events; text truncated to 80 chars)
-//   - transcript.text / transcript.text_len (for completed events)
-//   - audio_start_ms / audio_end_ms (for speech_started / speech_stopped — Lemonade's VAD timestamps)
+// recordInbound is the per-message hook: emit a span event for tracing
+// AND fold the message into the running Stats. The two jobs are
+// independent and live in their own helpers below.
 func (s *Stream) recordInbound(msg jsonMessage) {
 	now := time.Now()
-	msgType := msg.Type()
+	if s.sessionSpan != nil {
+		s.sessionSpan.AddEvent("realtime.inbound",
+			trace.WithAttributes(inboundAttrs(now.Sub(s.sessionStart), msg)...))
+	}
+	s.statsMu.Lock()
+	s.stats.observeInbound(now, msg)
+	s.statsMu.Unlock()
+}
 
+// inboundAttrs builds the OpenTelemetry attrs for a single inbound
+// message — pure function of (elapsed, msg) so it's trivially testable
+// and free of side effects.
+func inboundAttrs(elapsed time.Duration, msg jsonMessage) []attribute.KeyValue {
+	msgType := msg.Type()
 	attrs := []attribute.KeyValue{
 		attribute.String("message.type", msgType),
-		attribute.String("elapsed", now.Sub(s.sessionStart).Round(time.Millisecond).String()),
+		attribute.String("elapsed", elapsed.Round(time.Millisecond).String()),
 	}
 	if id, ok := msg["item_id"].(string); ok && id != "" {
 		attrs = append(attrs, attribute.String("item_id", id))
 	}
-
 	switch msgType {
 	case "conversation.item.input_audio_transcription.delta":
 		if d, ok := msg["delta"].(string); ok {
@@ -357,46 +374,47 @@ func (s *Stream) recordInbound(msg jsonMessage) {
 			attrs = append(attrs, attribute.Int64("audio_end_ms", v))
 		}
 	}
+	return attrs
+}
 
-	if s.sessionSpan != nil {
-		s.sessionSpan.AddEvent("realtime.inbound", trace.WithAttributes(attrs...))
-	}
+// observeInbound folds one inbound message into the running stats.
+// Caller holds the statsMu lock.
+func (st *Stats) observeInbound(now time.Time, msg jsonMessage) {
+	msgType := msg.Type()
+	st.InboundCounts[msgType]++
+	st.LastInboundType = msgType
+	st.LastInboundAt = now
 
-	s.statsMu.Lock()
-	s.inboundCounts[msgType]++
-	s.lastInboundType = msgType
-	s.lastInboundAt = now
 	switch msgType {
 	case "input_audio_buffer.speech_started":
-		s.speechStartedCount++
-		if s.firstSpeechStartedAt.IsZero() {
-			s.firstSpeechStartedAt = now
+		st.SpeechStartedCount++
+		if st.FirstSpeechStartedAt.IsZero() {
+			st.FirstSpeechStartedAt = now
 		}
 	case "input_audio_buffer.speech_stopped":
-		s.speechStoppedCount++
-		s.lastSpeechStoppedAt = now
+		st.SpeechStoppedCount++
+		st.LastSpeechStoppedAt = now
 	case "conversation.item.input_audio_transcription.delta":
-		if !s.commitAt.IsZero() && now.After(s.commitAt) {
-			s.deltaCountPostCommit++
-			if s.firstPostCommitType == "" {
-				s.firstPostCommitType = "delta"
-				s.firstPostCommitAt = now
+		if !st.CommitAt.IsZero() && now.After(st.CommitAt) {
+			st.DeltaCountPostCommit++
+			if st.FirstPostCommitType == "" {
+				st.FirstPostCommitType = "delta"
+				st.FirstPostCommitAt = now
 			}
-			if d, ok := msg["delta"].(string); ok && d != "" && s.firstPostCommitDelta == "" {
-				s.firstPostCommitDelta = d
+			if d, ok := msg["delta"].(string); ok && d != "" && st.FirstPostCommitDelta == "" {
+				st.FirstPostCommitDelta = d
 			}
 		}
 	case "conversation.item.input_audio_transcription.completed":
-		if !s.commitAt.IsZero() && s.firstPostCommitType == "" {
-			s.firstPostCommitType = "completed"
-			s.firstPostCommitAt = now
+		if !st.CommitAt.IsZero() && st.FirstPostCommitType == "" {
+			st.FirstPostCommitType = "completed"
+			st.FirstPostCommitAt = now
 		}
 		if t, ok := msg["transcript"].(string); ok {
-			s.completedText = t
+			st.CompletedText = t
 		}
-		s.completedAt = now
+		st.CompletedAt = now
 	}
-	s.statsMu.Unlock()
 }
 
 // recordOutbound mirrors recordInbound for messages vocis sends to the
@@ -412,7 +430,7 @@ func (s *Stream) recordOutbound(msgType string) {
 		attribute.String("elapsed", time.Since(s.sessionStart).Round(time.Millisecond).String()),
 	))
 	s.statsMu.Lock()
-	s.outboundCounts[msgType]++
+	s.stats.OutboundCounts[msgType]++
 	s.statsMu.Unlock()
 }
 
@@ -424,21 +442,21 @@ func (s *Stream) PreCommitContext() PreCommitContext {
 	defer s.statsMu.Unlock()
 	now := time.Now()
 	ctx := PreCommitContext{
-		LastInboundType: s.lastInboundType,
-		AppendBytes:     s.appendBytes,
+		LastInboundType: s.stats.LastInboundType,
+		AppendBytes:     s.stats.AppendBytes,
 		// 16-bit PCM mono → 2 bytes per sample. Total samples = bytes/2.
 		// Audio ms = samples * 1000 / sample_rate.
 		AppendApproxMs: 0,
 	}
 	if s.targetRate > 0 {
-		ctx.AppendApproxMs = (s.appendBytes / 2) * 1000 / int64(s.targetRate)
+		ctx.AppendApproxMs = (s.stats.AppendBytes / 2) * 1000 / int64(s.targetRate)
 	}
-	if !s.lastInboundAt.IsZero() {
-		ctx.MsSinceLastInbound = now.Sub(s.lastInboundAt).Milliseconds()
+	if !s.stats.LastInboundAt.IsZero() {
+		ctx.MsSinceLastInbound = now.Sub(s.stats.LastInboundAt).Milliseconds()
 	}
-	if !s.lastSpeechStoppedAt.IsZero() {
+	if !s.stats.LastSpeechStoppedAt.IsZero() {
 		ctx.SpeechStoppedSeenBefore = true
-		ctx.MsSinceSpeechStopped = now.Sub(s.lastSpeechStoppedAt).Milliseconds()
+		ctx.MsSinceSpeechStopped = now.Sub(s.stats.LastSpeechStoppedAt).Milliseconds()
 	}
 	return ctx
 }
@@ -450,22 +468,22 @@ func (s *Stream) PostCommitStats() PostCommitStats {
 	s.statsMu.Lock()
 	defer s.statsMu.Unlock()
 	stats := PostCommitStats{
-		FirstEventType:    s.firstPostCommitType,
-		FirstDeltaText:    truncate(s.firstPostCommitDelta, 80),
-		FirstDeltaTextLen: len(s.firstPostCommitDelta),
-		CompletedText:     truncate(s.completedText, 80),
-		CompletedTextLen:  len(s.completedText),
-		DeltaCount:        s.deltaCountPostCommit,
+		FirstEventType:    s.stats.FirstPostCommitType,
+		FirstDeltaText:    truncate(s.stats.FirstPostCommitDelta, 80),
+		FirstDeltaTextLen: len(s.stats.FirstPostCommitDelta),
+		CompletedText:     truncate(s.stats.CompletedText, 80),
+		CompletedTextLen:  len(s.stats.CompletedText),
+		DeltaCount:        s.stats.DeltaCountPostCommit,
 	}
-	if s.firstPostCommitDelta != "" && s.completedText != "" {
-		stats.DeltaEqCompleted = strings.TrimSpace(s.firstPostCommitDelta) == strings.TrimSpace(s.completedText)
+	if s.stats.FirstPostCommitDelta != "" && s.stats.CompletedText != "" {
+		stats.DeltaEqCompleted = strings.TrimSpace(s.stats.FirstPostCommitDelta) == strings.TrimSpace(s.stats.CompletedText)
 	}
-	if !s.commitAt.IsZero() {
-		if !s.firstPostCommitAt.IsZero() {
-			stats.FirstEventMs = s.firstPostCommitAt.Sub(s.commitAt).Milliseconds()
+	if !s.stats.CommitAt.IsZero() {
+		if !s.stats.FirstPostCommitAt.IsZero() {
+			stats.FirstEventMs = s.stats.FirstPostCommitAt.Sub(s.stats.CommitAt).Milliseconds()
 		}
-		if !s.completedAt.IsZero() {
-			stats.CompletedMs = s.completedAt.Sub(s.commitAt).Milliseconds()
+		if !s.stats.CompletedAt.IsZero() {
+			stats.CompletedMs = s.stats.CompletedAt.Sub(s.stats.CommitAt).Milliseconds()
 		}
 	}
 	return stats
@@ -482,19 +500,19 @@ func (s *Stream) setSessionSummaryAttrs() {
 	defer s.statsMu.Unlock()
 	attrs := []attribute.KeyValue{
 		attribute.Int64("session.duration_ms", time.Since(s.sessionStart).Milliseconds()),
-		attribute.Int("inbound.deltas_count", s.inboundCounts["conversation.item.input_audio_transcription.delta"]),
-		attribute.Int("inbound.completed_count", s.inboundCounts["conversation.item.input_audio_transcription.completed"]),
-		attribute.Int("inbound.speech_started_count", s.speechStartedCount),
-		attribute.Int("inbound.speech_stopped_count", s.speechStoppedCount),
-		attribute.Int("inbound.committed_count", s.inboundCounts["input_audio_buffer.committed"]),
-		attribute.Int("outbound.append_count", s.outboundCounts["input_audio_buffer.append"]),
-		attribute.Int64("outbound.append_bytes", s.appendBytes),
+		attribute.Int("inbound.deltas_count", s.stats.InboundCounts["conversation.item.input_audio_transcription.delta"]),
+		attribute.Int("inbound.completed_count", s.stats.InboundCounts["conversation.item.input_audio_transcription.completed"]),
+		attribute.Int("inbound.speech_started_count", s.stats.SpeechStartedCount),
+		attribute.Int("inbound.speech_stopped_count", s.stats.SpeechStoppedCount),
+		attribute.Int("inbound.committed_count", s.stats.InboundCounts["input_audio_buffer.committed"]),
+		attribute.Int("outbound.append_count", s.stats.OutboundCounts["input_audio_buffer.append"]),
+		attribute.Int64("outbound.append_bytes", s.stats.AppendBytes),
 	}
 	if s.targetRate > 0 {
-		attrs = append(attrs, attribute.Int64("outbound.append_total_audio_ms", (s.appendBytes/2)*1000/int64(s.targetRate)))
+		attrs = append(attrs, attribute.Int64("outbound.append_total_audio_ms", (s.stats.AppendBytes/2)*1000/int64(s.targetRate)))
 	}
-	if !s.firstSpeechStartedAt.IsZero() {
-		attrs = append(attrs, attribute.Int64("session.first_speech_started_at_ms", s.firstSpeechStartedAt.Sub(s.sessionStart).Milliseconds()))
+	if !s.stats.FirstSpeechStartedAt.IsZero() {
+		attrs = append(attrs, attribute.Int64("session.first_speech_started_at_ms", s.stats.FirstSpeechStartedAt.Sub(s.sessionStart).Milliseconds()))
 	}
 	s.sessionSpan.SetAttributes(attrs...)
 }
@@ -578,6 +596,15 @@ type ConnectCallbacks struct {
 	OnConnected  func()
 }
 
+// DictationOpts groups every parameter StartDictation needs. Pass-by-struct
+// keeps call sites readable when the parameter list grows beyond ~3 args.
+type DictationOpts struct {
+	SampleRate int
+	Channels   int
+	Samples    <-chan []int16
+	Callbacks  ConnectCallbacks
+}
+
 type DictationSession struct {
 	writeTimeout          time.Duration
 	waitFinalFloorSeconds int
@@ -588,13 +615,16 @@ type DictationSession struct {
 	pumpDone chan error
 	finals   chan finalResult
 
-	mu            sync.Mutex
-	stream        *Stream
-	liveSegments  bool
-	hasTrailing   bool
-	segmentCount  int
-	streamReadyAt time.Time
-	lastSegmentAt time.Time
+	// All state below is accessed across goroutines (caller, pump,
+	// consumeStreamEvents). Atomics keep the call sites readable —
+	// no mutex bookkeeping, just Load/Store/Add. Timestamps live as
+	// UnixNano int64 so atomic.Int64 covers them.
+	stream        atomic.Pointer[Stream]
+	liveSegments  atomic.Bool
+	hasTrailing   atomic.Bool
+	segmentCount  atomic.Int32
+	streamReadyAt atomic.Int64 // UnixNano; 0 = unset
+	lastSegmentAt atomic.Int64 // UnixNano; 0 = unset
 }
 
 type finalResult struct {
@@ -602,16 +632,11 @@ type finalResult struct {
 	err  error
 }
 
-func (c *Client) StartDictation(
-	ctx context.Context,
-	sampleRate, channels int,
-	samples <-chan []int16,
-	callbacks ConnectCallbacks,
-) (*DictationSession, error) {
-	if sampleRate <= 0 {
+func (c *Client) StartDictation(ctx context.Context, opts DictationOpts) (*DictationSession, error) {
+	if opts.SampleRate <= 0 {
 		return nil, errors.New("recording.sample_rate must be greater than zero")
 	}
-	if channels <= 0 {
+	if opts.Channels <= 0 {
 		return nil, errors.New("recording.channels must be greater than zero")
 	}
 
@@ -620,13 +645,13 @@ func (c *Client) StartDictation(
 		writeTimeout:          c.writeTimeout,
 		waitFinalFloorSeconds: c.streaming.WaitFinalSeconds,
 		cancel:                cancel,
-		callbacks:             callbacks,
+		callbacks:             opts.Callbacks,
 		events:                make(chan DictationEvent, 16),
 		pumpDone:              make(chan error, 1),
 		finals:                make(chan finalResult, 8),
-		liveSegments:          true,
 	}
-	go session.run(pumpCtx, c, sampleRate, channels, samples)
+	session.liveSegments.Store(true)
+	go session.run(pumpCtx, c, opts.SampleRate, opts.Channels, opts.Samples)
 	return session, nil
 }
 
@@ -635,7 +660,7 @@ func (s *DictationSession) Events() <-chan DictationEvent { return s.events }
 // Finalize waits for the audio pump to finish, then collects any trailing
 // transcript that arrived after the last live segment.
 func (s *DictationSession) Finalize(ctx context.Context) (FinalizeResult, error) {
-	s.setLiveSegments(false)
+	s.liveSegments.Store(false)
 
 	// Wait for the pump to exit naturally (samples channel closes).
 	// Only cancel as a fallback if the finalization context expires.
@@ -657,7 +682,7 @@ func (s *DictationSession) Finalize(ctx context.Context) (FinalizeResult, error)
 	}
 	defer s.closeStream()
 
-	stream := s.currentStream()
+	stream := s.stream.Load()
 	if stream == nil {
 		return FinalizeResult{}, errors.New("realtime transcription stream was not established")
 	}
@@ -677,7 +702,7 @@ func (s *DictationSession) collectTrailing(ctx context.Context, stream *Stream) 
 	}
 
 	// If all audio was already consumed by live segments, we're done.
-	if !s.hasTrailingAudio() && strings.TrimSpace(stream.Partial()) == "" {
+	if !s.hasTrailing.Load() && strings.TrimSpace(stream.Partial()) == "" {
 		return FinalizeResult{Text: text}, nil
 	}
 
@@ -704,7 +729,7 @@ func (s *DictationSession) collectTrailing(ctx context.Context, stream *Stream) 
 
 	_, waitSpan := telemetry.StartSpan(ctx, "vocis.transcribe.wait_final",
 		attribute.String("trailing_duration", s.trailingDuration().Round(10*time.Millisecond).String()),
-		attribute.Int("segment_count", s.segmentCountValue()),
+		attribute.Int("segment_count", int(s.segmentCount.Load())),
 	)
 	finalText, err := s.waitForFinal(ctx)
 	addPostCommitAttrs(waitSpan, stream.PostCommitStats())
@@ -767,7 +792,7 @@ func (s *DictationSession) run(
 			s.finishPump(err)
 			return
 		}
-		s.markAudioAppended()
+		s.hasTrailing.Store(true)
 	}
 
 	// Stream live audio until the samples channel closes or context cancels.
@@ -873,7 +898,7 @@ func (s *DictationSession) streamAudio(ctx context.Context, stream *Stream, samp
 				s.finishPump(err)
 				return
 			}
-			s.markAudioAppended()
+			s.hasTrailing.Store(true)
 		}
 	}
 }
@@ -883,7 +908,7 @@ func (s *DictationSession) streamAudio(ctx context.Context, stream *Stream, samp
 // ---------------------------------------------------------------------------
 
 func (s *DictationSession) consumeStreamEvents(ctx context.Context) {
-	stream := s.currentStream()
+	stream := s.stream.Load()
 	if stream == nil {
 		return
 	}
@@ -913,10 +938,10 @@ func (s *DictationSession) handleStreamEvent(event StreamEvent) error {
 		if text == "" {
 			return nil
 		}
-		s.clearTrailingFlag()
-		s.markSegmentReceived()
+		s.hasTrailing.Store(false)
+		s.lastSegmentAt.Store(time.Now().UnixNano())
 		text = s.formatSegmentText(text)
-		if s.liveSegmentsEnabled() {
+		if s.liveSegments.Load() {
 			s.emitEvent(DictationEvent{Type: DictationEventSegment, Text: text})
 			return nil
 		}
@@ -964,7 +989,7 @@ func (s *DictationSession) drainPendingSegments(ctx context.Context, stream *Str
 				}
 			}
 			timer.Reset(250 * time.Millisecond)
-			if !s.hasTrailingAudio() && strings.TrimSpace(stream.Partial()) == "" {
+			if !s.hasTrailing.Load() && strings.TrimSpace(stream.Partial()) == "" {
 				return text, nil
 			}
 		}
@@ -1002,7 +1027,7 @@ func (s *DictationSession) waitForFinal(ctx context.Context) (string, error) {
 // because all audio was consumed by live segments.
 func (s *DictationSession) canSkipEmptyCommit(err error, stream *Stream) bool {
 	return errors.Is(err, ErrInputAudioBufferCommitEmpty) &&
-		s.segmentCountValue() > 0 &&
+		int(s.segmentCount.Load()) > 0 &&
 		strings.TrimSpace(stream.Partial()) == ""
 }
 
@@ -1010,7 +1035,7 @@ func (s *DictationSession) canSkipEmptyCommit(err error, stream *Stream) bool {
 // because we already have segment text and no partial is in flight.
 func (s *DictationSession) canSkipTrailingTimeout(err error, stream *Stream) bool {
 	return errors.Is(err, context.DeadlineExceeded) &&
-		s.segmentCountValue() > 0 &&
+		int(s.segmentCount.Load()) > 0 &&
 		strings.TrimSpace(stream.Partial()) == ""
 }
 
@@ -1047,100 +1072,51 @@ func (s *DictationSession) finishPump(err error) {
 }
 
 // ---------------------------------------------------------------------------
-// State accessors (mutex-protected)
+// State helpers — wrap the multi-step atomic patterns. Single-op accesses
+// (Load/Store on the atomic fields) happen inline at the call site.
 // ---------------------------------------------------------------------------
 
-func (s *DictationSession) currentStream() *Stream {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.stream
-}
-
+// setStream stamps streamReadyAt and publishes the stream pointer.
+// Pump goroutine only.
 func (s *DictationSession) setStream(stream *Stream) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.stream = stream
-	s.streamReadyAt = time.Now()
+	s.streamReadyAt.Store(time.Now().UnixNano())
+	s.stream.Store(stream)
 }
 
+// closeStream atomically swaps the stream pointer to nil and closes it.
+// Safe to call concurrently / multiple times.
 func (s *DictationSession) closeStream() {
-	s.mu.Lock()
-	stream := s.stream
-	s.stream = nil
-	s.mu.Unlock()
-	if stream != nil {
+	if stream := s.stream.Swap(nil); stream != nil {
 		_ = stream.Close()
 	}
 }
 
-func (s *DictationSession) liveSegmentsEnabled() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.liveSegments
-}
-
-func (s *DictationSession) setLiveSegments(enabled bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.liveSegments = enabled
-}
-
-func (s *DictationSession) markAudioAppended() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.hasTrailing = true
-}
-
-func (s *DictationSession) clearTrailingFlag() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.hasTrailing = false
-}
-
-func (s *DictationSession) hasTrailingAudio() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.hasTrailing
-}
-
-func (s *DictationSession) segmentCountValue() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.segmentCount
-}
-
-func (s *DictationSession) markSegmentReceived() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.lastSegmentAt = time.Now()
-}
-
+// trailingDuration returns time since the last segment arrived, falling
+// back to the stream-ready timestamp if no segment has come yet. Reads
+// two atomics independently — they're updated by different goroutines
+// and we don't need joint consistency, just "use whichever is fresher".
 func (s *DictationSession) trailingDuration() time.Duration {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ref := s.lastSegmentAt
-	if ref.IsZero() {
-		ref = s.streamReadyAt
+	ref := s.lastSegmentAt.Load()
+	if ref == 0 {
+		ref = s.streamReadyAt.Load()
 	}
-	if ref.IsZero() {
+	if ref == 0 {
 		return 0
 	}
-	return time.Since(ref)
+	return time.Since(time.Unix(0, ref))
 }
 
+// formatSegmentText increments the segment counter and adds a leading
+// space when the new segment needs separation from the running text.
+// Atomic.Add returns the new count, so first-segment is `n == 1`.
 func (s *DictationSession) formatSegmentText(text string) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return ""
 	}
-	if s.segmentCount == 0 {
-		s.segmentCount++
+	if s.segmentCount.Add(1) == 1 {
 		return text
 	}
-	s.segmentCount++
 	if strings.HasPrefix(text, " ") || strings.HasPrefix(text, "\n") {
 		return text
 	}

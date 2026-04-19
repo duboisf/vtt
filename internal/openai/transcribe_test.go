@@ -359,9 +359,8 @@ func TestStartStreamKeepsFirstWordWhenCompletedTranscriptIsSuffix(t *testing.T) 
 func TestCanSkipTrailingTimeout(t *testing.T) {
 	t.Parallel()
 
-	session := &DictationSession{
-		segmentCount: 1,
-	}
+	session := &DictationSession{}
+	session.segmentCount.Store(1)
 	stream := &Stream{}
 
 	if !session.canSkipTrailingTimeout(context.DeadlineExceeded, stream) {
@@ -434,10 +433,10 @@ func TestDictationSessionHandleStreamEventEmitsLiveSegment(t *testing.T) {
 	t.Parallel()
 
 	session := &DictationSession{
-		liveSegments:  true,
-		events:        make(chan DictationEvent, 1),
-		finals:        make(chan finalResult, 1),
+		events: make(chan DictationEvent, 1),
+		finals: make(chan finalResult, 1),
 	}
+	session.liveSegments.Store(true)
 
 	err := session.handleStreamEvent(StreamEvent{
 		Type: StreamEventFinal,
@@ -470,10 +469,10 @@ func TestDictationSessionHandleStreamEventQueuesFinalAfterLiveDisabled(t *testin
 	t.Parallel()
 
 	session := &DictationSession{
-		liveSegments:  false,
-		events:        make(chan DictationEvent, 1),
-		finals:        make(chan finalResult, 1),
+		events: make(chan DictationEvent, 1),
+		finals: make(chan finalResult, 1),
 	}
+	// liveSegments left false (zero value)
 
 	err := session.handleStreamEvent(StreamEvent{
 		Type: StreamEventFinal,
@@ -760,7 +759,7 @@ func TestFinalizeReceivesTrailingSegmentAfterSamplesClose(t *testing.T) {
 	samples := make(chan []int16, 1)
 	samples <- []int16{1000, -1000, 2000, -2000}
 
-	dictation, err := client.StartDictation(ctx, 24000, 1, samples, ConnectCallbacks{})
+	dictation, err := client.StartDictation(ctx, DictationOpts{SampleRate: 24000, Channels: 1, Samples: samples})
 	if err != nil {
 		t.Fatalf("start dictation: %v", err)
 	}
@@ -870,7 +869,7 @@ func TestFinalizeSucceedsWhenCommitEmptyArrivesViaFinals(t *testing.T) {
 	samples := make(chan []int16, 4)
 	samples <- []int16{1000, -1000, 2000, -2000}
 
-	dictation, err := client.StartDictation(ctx, 24000, 1, samples, ConnectCallbacks{})
+	dictation, err := client.StartDictation(ctx, DictationOpts{SampleRate: 24000, Channels: 1, Samples: samples})
 	if err != nil {
 		t.Fatalf("start dictation: %v", err)
 	}

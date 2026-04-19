@@ -59,13 +59,11 @@ func TestPiperAudioToRealtimeSmoke(t *testing.T) {
 	}
 
 	client := openai.New(apiKey, cfg.OpenAI, cfg.Streaming)
-	dictation, err := client.StartDictation(
-		ctx,
-		cfg.Recording.SampleRate,
-		cfg.Recording.Channels,
-		recording.Samples(),
-		openai.ConnectCallbacks{},
-	)
+	dictation, err := client.StartDictation(ctx, openai.DictationOpts{
+		SampleRate: cfg.Recording.SampleRate,
+		Channels:   cfg.Recording.Channels,
+		Samples:    recording.Samples(),
+	})
 	if err != nil {
 		t.Fatalf("start dictation: %v", err)
 	}

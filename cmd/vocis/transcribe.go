@@ -90,12 +90,11 @@ func runTranscribe() error {
 	defer recSession.Cleanup()
 
 	client := openai.New(apiKey, cfg.OpenAI, cfg.Streaming)
-	dictation, err := client.StartDictation(
-		recordingCtx,
-		recSession.SampleRate(),
-		recSession.Channels(),
-		recSession.Samples(),
-		openai.ConnectCallbacks{
+	dictation, err := client.StartDictation(recordingCtx, openai.DictationOpts{
+		SampleRate: recSession.SampleRate(),
+		Channels:   recSession.Channels(),
+		Samples:    recSession.Samples(),
+		Callbacks: openai.ConnectCallbacks{
 			OnConnecting: func(attempt, max int) {
 				sessionlog.Infof("realtime: connecting (attempt %d/%d)", attempt, max)
 			},
@@ -103,7 +102,7 @@ func runTranscribe() error {
 				sessionlog.Infof("realtime: connected")
 			},
 		},
-	)
+	})
 	if err != nil {
 		_ = recSession.Stop(context.Background())
 		return fmt.Errorf("start dictation: %w", err)
