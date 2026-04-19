@@ -49,13 +49,18 @@ type recordingState struct {
 	session   *recorder.Session
 	dictation *openai.DictationSession
 	cancel    context.CancelFunc
-	target       platform.Target
-	liveText     string
-	displayText  string
-	submitMode   bool
-	span         trace.Span
-	spanCtx      context.Context
-	activeSpan   trace.Span
+	target      platform.Target
+	liveText    string
+	displayText string // committed segments (canonical text), one per line
+	// currentPartial is the in-flight (still-streaming) turn. The overlay
+	// renders displayText + currentPartial; on the next Partial it
+	// replaces, on the next Segment it gets cleared and the canonical
+	// text lands in displayText instead.
+	currentPartial string
+	submitMode     bool
+	span           trace.Span
+	spanCtx        context.Context
+	activeSpan     trace.Span
 }
 
 type OverlayUI interface {
@@ -818,33 +823,45 @@ func (a *App) handleDictationEvent(
 ) error {
 	switch event.Type {
 	case openai.DictationEventPartial:
-		if a.cfg.Streaming.ShowPartialOverlay {
-			display := state.displayText
-			if partial := strings.TrimSpace(event.Text); partial != "" {
-				if display != "" {
-					display += " "
-				}
-				display += partial
-			}
-			if display != "" {
-				a.overlay.SetListeningText(state.target.WindowClass, display)
-			}
+		if !a.cfg.Streaming.ShowPartialOverlay {
+			return nil
 		}
+		// Live-subtitle mode: the partial replaces the previous in-flight
+		// partial. Rendered preview = committed segments + current partial.
+		state.currentPartial = strings.TrimSpace(event.Text)
+		a.overlay.SetListeningText(state.target.WindowClass, renderPreview(state.displayText, state.currentPartial))
 		return nil
+
 	case openai.DictationEventSegment:
 		text := strings.TrimSpace(event.Text)
 		if text == "" {
 			return nil
 		}
+		// The canonical turn replaces whatever partial was being shown.
 		state.liveText += event.Text
 		if state.displayText != "" {
 			state.displayText += "\n"
 		}
 		state.displayText += text
+		state.currentPartial = ""
 		a.overlay.SetListeningText(state.target.WindowClass, state.displayText)
 		sessionlog.Infof("stream segment accumulated: %d chars total", len(state.liveText))
 		return nil
+
 	default:
 		return nil
 	}
+}
+
+// renderPreview joins committed text with the in-flight partial. Partial
+// goes on its own line because once it completes it becomes a new line —
+// the visual position shouldn't jump between the two states.
+func renderPreview(committed, partial string) string {
+	if partial == "" {
+		return committed
+	}
+	if committed == "" {
+		return partial
+	}
+	return committed + "\n" + partial
 }

@@ -40,7 +40,11 @@ func TestHandleDictationEventUpdatesOverlayWithPartialText(t *testing.T) {
 	}
 }
 
-func TestPartialPrependsAccumulatedSegments(t *testing.T) {
+// TestPartialAppendsBelowAccumulatedSegments locks down live-subtitle
+// behavior: the in-flight partial renders on its own line below the
+// committed segments. When the matching `completed` event arrives, the
+// canonical text replaces the partial in place (covered separately).
+func TestPartialAppendsBelowAccumulatedSegments(t *testing.T) {
 	t.Parallel()
 
 	fakeOverlay := &overlayStub{}
@@ -61,8 +65,73 @@ func TestPartialPrependsAccumulatedSegments(t *testing.T) {
 		Text: "this is more",
 	})
 
-	if fakeOverlay.listeningText != "Hello world. this is more" {
-		t.Fatalf("listeningText = %q, want accumulated + partial", fakeOverlay.listeningText)
+	if fakeOverlay.listeningText != "Hello world.\nthis is more" {
+		t.Fatalf("listeningText = %q, want committed + newline + partial", fakeOverlay.listeningText)
+	}
+	if state.currentPartial != "this is more" {
+		t.Fatalf("currentPartial = %q, want %q", state.currentPartial, "this is more")
+	}
+}
+
+// TestPartialReplacesPreviousPartial confirms the in-place update
+// behavior — newer partial overwrites the previous one rather than
+// appending.
+func TestPartialReplacesPreviousPartial(t *testing.T) {
+	t.Parallel()
+
+	fakeOverlay := &overlayStub{}
+	app := &App{
+		cfg: config.Config{
+			Streaming: config.StreamingConfig{ShowPartialOverlay: true},
+		},
+		overlay: fakeOverlay,
+	}
+	state := &recordingState{
+		target:         platform.Target{WindowClass: "Gedit"},
+		displayText:    "Hello world.",
+		currentPartial: "this is",
+	}
+
+	_ = app.handleDictationEvent(context.Background(), state, openai.DictationEvent{
+		Type: openai.DictationEventPartial,
+		Text: "this is more text",
+	})
+
+	if fakeOverlay.listeningText != "Hello world.\nthis is more text" {
+		t.Fatalf("listeningText = %q, want previous partial replaced", fakeOverlay.listeningText)
+	}
+}
+
+// TestSegmentClearsPartial confirms that when a turn completes, the
+// canonical segment text replaces the in-flight partial (no double
+// rendering of "this is more text" + "this is more text, you know").
+func TestSegmentClearsPartial(t *testing.T) {
+	t.Parallel()
+
+	fakeOverlay := &overlayStub{}
+	app := &App{
+		cfg: config.Config{
+			Streaming: config.StreamingConfig{ShowPartialOverlay: true},
+		},
+		overlay: fakeOverlay,
+	}
+	state := &recordingState{
+		target:         platform.Target{WindowClass: "Gedit"},
+		displayText:    "Hello world.",
+		currentPartial: "this is mo",
+	}
+
+	_ = app.handleDictationEvent(context.Background(), state, openai.DictationEvent{
+		Type: openai.DictationEventSegment,
+		Text: "this is more text, finalized.",
+	})
+
+	if state.currentPartial != "" {
+		t.Fatalf("currentPartial = %q, want cleared after segment", state.currentPartial)
+	}
+	want := "Hello world.\nthis is more text, finalized."
+	if fakeOverlay.listeningText != want {
+		t.Fatalf("listeningText = %q, want %q", fakeOverlay.listeningText, want)
 	}
 }
 
