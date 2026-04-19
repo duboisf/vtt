@@ -145,6 +145,20 @@ type Stream struct {
 	activeID  string
 	partials  map[string]string
 
+	// mergeDelta decides how a transcription.delta event combines with the
+	// running partial — OpenAI is incremental (append), Lemonade is
+	// cumulative (replace). Populated from Transport.MergePartialDelta at
+	// stream construction; tests may set it directly. A nil value defaults
+	// to incremental concatenation via appendPartial.
+	mergeDelta func(existing, delta string) string
+
+	// postCommitSpan receives one event per post-commit inbound message
+	// (delta/completed) so the wait_final span shows exactly when Whisper
+	// emitted each result. Set by SetPostCommitSpan just before commit and
+	// cleared when wait_final ends. Atomic pointer lets readLoop read it
+	// without racing the caller that sets/clears it.
+	postCommitSpan atomic.Pointer[postCommitRef]
+
 	// statsMu guards the entire stats value. Counts/totals here feed the
 	// session-span closing attributes plus the PreCommitContext /
 	// PostCommitStats projections used by the commit / wait_final spans.
@@ -253,6 +267,7 @@ func (c *Client) StartStream(ctx context.Context, sampleRate, channels int) (*St
 		events:       make(chan StreamEvent, 16),
 		readDone:     make(chan struct{}),
 		stats:        newStats(),
+		mergeDelta:   c.transport.MergePartialDelta,
 	}
 	go stream.readLoop()
 
@@ -335,7 +350,6 @@ func (s *Stream) Close() error {
 		if s.sessionSpan != nil {
 			s.setSessionSummaryAttrs()
 			telemetry.EndSpan(s.sessionSpan, nil)
-			s.sessionSpan = nil
 		}
 	})
 	return err
@@ -350,9 +364,65 @@ func (s *Stream) recordInbound(msg jsonMessage) {
 		s.sessionSpan.AddEvent("realtime.inbound",
 			trace.WithAttributes(inboundAttrs(now.Sub(s.sessionStart), msg)...))
 	}
+	if ref := s.postCommitSpan.Load(); ref != nil {
+		if name, attrs, ok := postCommitEventAttrs(now.Sub(ref.startedAt), msg); ok {
+			ref.span.AddEvent(name, trace.WithAttributes(attrs...))
+		}
+	}
 	s.statsMu.Lock()
 	s.stats.observeInbound(now, msg)
 	s.statsMu.Unlock()
+}
+
+// postCommitRef pairs the wait_final span with the commit timestamp so
+// per-message events carry their offset since commit — the thing the
+// reader actually wants to see on the timeline.
+type postCommitRef struct {
+	span      trace.Span
+	startedAt time.Time
+}
+
+// SetPostCommitSpan attaches the wait_final span so recordInbound can
+// add per-message events to it. No pairing clear: once wait_final ends,
+// AddEvent calls on the ended span are no-ops, and the Stream is
+// short-lived enough that holding the reference doesn't matter.
+func (s *Stream) SetPostCommitSpan(span trace.Span, startedAt time.Time) {
+	s.postCommitSpan.Store(&postCommitRef{span: span, startedAt: startedAt})
+}
+
+// postCommitEventAttrs maps a post-commit inbound message to a span event
+// name + attributes. Returns ok=false for uninteresting message types
+// (session.updated, speech_started after the fact, etc.) so the
+// wait_final span timeline stays focused on what actually blocks it:
+// deltas and the terminal completed/failed event.
+func postCommitEventAttrs(sinceCommit time.Duration, msg jsonMessage) (string, []attribute.KeyValue, bool) {
+	msgType := msg.Type()
+	base := []attribute.KeyValue{
+		attribute.Int64("since_commit_ms", sinceCommit.Milliseconds()),
+	}
+	switch msgType {
+	case "conversation.item.input_audio_transcription.delta":
+		attrs := base
+		if d, ok := msg["delta"].(string); ok {
+			attrs = append(attrs,
+				attribute.Int("delta.text_len", len(d)),
+				attribute.String("delta.text", truncate(d, 80)),
+			)
+		}
+		return "realtime.delta", attrs, true
+	case "conversation.item.input_audio_transcription.completed":
+		attrs := base
+		if t, ok := msg["transcript"].(string); ok {
+			attrs = append(attrs,
+				attribute.Int("transcript.text_len", len(t)),
+				attribute.String("transcript.text", truncate(t, 80)),
+			)
+		}
+		return "realtime.completed", attrs, true
+	case "conversation.item.input_audio_transcription.failed":
+		return "realtime.failed", base, true
+	}
+	return "", nil, false
 }
 
 // inboundAttrs builds the OpenTelemetry attrs for a single inbound
@@ -744,10 +814,12 @@ func (s *DictationSession) collectTrailing(ctx context.Context, stream *Stream) 
 		return FinalizeResult{}, err
 	}
 
+	waitStartedAt := time.Now()
 	_, waitSpan := telemetry.StartSpan(ctx, "vocis.transcribe.wait_final",
 		attribute.String("trailing_duration", s.trailingDuration().Round(10*time.Millisecond).String()),
 		attribute.Int("segment_count", int(s.segmentCount.Load())),
 	)
+	stream.SetPostCommitSpan(waitSpan, waitStartedAt)
 	finalText, err := s.waitForFinal(ctx)
 	addPostCommitAttrs(waitSpan, stream.PostCommitStats())
 	if err != nil && (s.canSkipTrailingTimeout(err, stream) || s.canSkipEmptyCommit(err, stream)) {
@@ -1304,14 +1376,19 @@ func (s *Stream) appendPartial(itemID, delta string) string {
 	s.partialMu.Lock()
 	defer s.partialMu.Unlock()
 
+	merge := s.mergeDelta
+	if merge == nil {
+		merge = mergeIncrementalDelta
+	}
+
 	if itemID == "" {
-		s.partial += delta
+		s.partial = merge(s.partial, delta)
 		return s.partial
 	}
 	if s.partials == nil {
 		s.partials = make(map[string]string)
 	}
-	s.partials[itemID] += delta
+	s.partials[itemID] = merge(s.partials[itemID], delta)
 	s.activeID = itemID
 	s.partial = s.partials[itemID]
 	return s.partial

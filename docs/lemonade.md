@@ -139,6 +139,15 @@ Observations:
   [`internal/openai/transcribe.go`](../internal/openai/transcribe.go)
   spans `vocis.transcribe.wait_final` for the live gap (`first_event_ms`
   vs `completed_ms`).
+- **Cumulative deltas (not incremental).** OpenAI's realtime API emits
+  `transcription.delta` events where each `delta` is only the *new*
+  text to append (`"Ok"`, `" I"`, `" see"`). Lemonade instead emits each
+  delta as the *full* transcript so far (`"Ok"`, `"OK I"`, `"OK I see"`).
+  Naïve concatenation (`partial += delta`) produces junk like
+  `"OkOK IOK I see"`. Each backend declares its own strategy via
+  `Transport.MergePartialDelta`: the OpenAI transport appends, the
+  Lemonade transport replaces. `Stream.appendPartial` calls through
+  this strategy rather than hardcoding either behavior.
 - **Silence hallucinations.** On silent or near-silent audio Whisper
   often emits repeated phrases into the delta stream (`"Thank you. Thank
   you. Thank you…"`). The `completed` event usually contains the

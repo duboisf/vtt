@@ -113,6 +113,12 @@ func (c *Client) PostProcess(ctx context.Context, cfg config.PostProcessConfig, 
 	resultCh := make(chan streamResult, 1)
 
 	start := time.Now()
+	span.AddEvent("postprocess.input",
+		trace.WithAttributes(
+			attribute.Int("input.text_len", len(text)),
+			attribute.String("input.text", truncate(text, 500)),
+		),
+	)
 	span.AddEvent("postprocess.streaming_request_sent")
 
 	go func() {
@@ -168,6 +174,14 @@ func (c *Client) PostProcess(ctx context.Context, cfg config.PostProcessConfig, 
 		span.AddEvent("postprocess.first_token_timeout",
 			trace.WithAttributes(attribute.String("timeout", firstTokenTimeout.String())),
 		)
+		span.AddEvent("postprocess.output",
+			trace.WithAttributes(
+				attribute.Bool("skipped", true),
+				attribute.String("reason", "first_token_timeout"),
+				attribute.Int("output.text_len", len(text)),
+				attribute.String("output.text", truncate(text, 500)),
+			),
+		)
 		sessionlog.Warnf("postprocess: no tokens within %s, giving up", firstTokenTimeout)
 		return PostProcessResult{Text: text, Skipped: true}
 	}
@@ -184,6 +198,14 @@ func (c *Client) PostProcess(ctx context.Context, cfg config.PostProcessConfig, 
 func (c *Client) finishPostProcess(span trace.Span, r streamResult, rawText, model string) PostProcessResult {
 	if r.err != nil {
 		span.SetAttributes(attribute.String("postprocess.error", r.err.Error()))
+		span.AddEvent("postprocess.output",
+			trace.WithAttributes(
+				attribute.Bool("skipped", true),
+				attribute.String("reason", "stream_error"),
+				attribute.Int("output.text_len", len(rawText)),
+				attribute.String("output.text", truncate(rawText, 500)),
+			),
+		)
 		sessionlog.Warnf("postprocess failed, using raw transcription: %v", r.err)
 		return PostProcessResult{Text: rawText, Skipped: true}
 	}
@@ -191,10 +213,26 @@ func (c *Client) finishPostProcess(span trace.Span, r streamResult, rawText, mod
 	cleaned := strings.TrimSpace(r.text)
 	if cleaned == "" {
 		span.AddEvent("postprocess.empty_response")
+		span.AddEvent("postprocess.output",
+			trace.WithAttributes(
+				attribute.Bool("skipped", true),
+				attribute.String("reason", "empty_response"),
+				attribute.Int("output.text_len", len(rawText)),
+				attribute.String("output.text", truncate(rawText, 500)),
+			),
+		)
 		sessionlog.Warnf("postprocess returned empty text, using raw transcription")
 		return PostProcessResult{Text: rawText, Skipped: true}
 	}
 
+	span.AddEvent("postprocess.output",
+		trace.WithAttributes(
+			attribute.Bool("skipped", false),
+			attribute.Int("output.text_len", len(cleaned)),
+			attribute.String("output.text", truncate(cleaned, 500)),
+			attribute.Int("input.text_len", len(rawText)),
+		),
+	)
 	sessionlog.Debugf("postprocess result=%q", cleaned)
 	sessionlog.Infof("postprocess cleaned=%d raw=%d model=%s", len(cleaned), len(rawText), model)
 	return PostProcessResult{Text: cleaned}

@@ -504,6 +504,66 @@ func TestAppendSegmentTextAddsSpaceBetweenChunks(t *testing.T) {
 	}
 }
 
+// TestOpenAITransportMergePartialDeltaAppends documents that OpenAI's
+// realtime API emits each transcription.delta as the *incremental* new
+// text — the merge strategy concatenates.
+func TestOpenAITransportMergePartialDeltaAppends(t *testing.T) {
+	t.Parallel()
+
+	transport := &openaiTransport{}
+	if got := transport.MergePartialDelta("Ok", " I"); got != "Ok I" {
+		t.Fatalf("MergePartialDelta = %q, want %q", got, "Ok I")
+	}
+	if got := transport.MergePartialDelta("", "Ok"); got != "Ok" {
+		t.Fatalf("MergePartialDelta (first) = %q, want %q", got, "Ok")
+	}
+}
+
+// TestStreamAppendPartialIncrementalDeltas exercises the OpenAI delta
+// semantics: each event carries only the new text to append.
+func TestStreamAppendPartialIncrementalDeltas(t *testing.T) {
+	t.Parallel()
+
+	s := &Stream{mergeDelta: mergeIncrementalDelta}
+	s.appendPartial("item_1", "Ok")
+	s.appendPartial("item_1", " I")
+	got := s.appendPartial("item_1", " see")
+	if got != "Ok I see" {
+		t.Fatalf("incremental partial = %q, want %q", got, "Ok I see")
+	}
+}
+
+// TestStreamAppendPartialCumulativeDeltas exercises the Lemonade delta
+// semantics: each event carries the full transcript so far. Naïve
+// concatenation would produce "OkOK IOK I see" — the transport's merge
+// strategy must replace rather than append.
+func TestStreamAppendPartialCumulativeDeltas(t *testing.T) {
+	t.Parallel()
+
+	s := &Stream{mergeDelta: mergeCumulativeDelta}
+	s.appendPartial("item_1", "Ok")
+	s.appendPartial("item_1", "OK I")
+	got := s.appendPartial("item_1", "OK I see")
+	if got != "OK I see" {
+		t.Fatalf("cumulative partial = %q, want %q", got, "OK I see")
+	}
+}
+
+// TestStreamAppendPartialDefaultsToIncremental documents that a zero-value
+// Stream (constructed without a transport in tests) falls back to the
+// OpenAI-style append. Protects helpers that build a Stream directly.
+func TestStreamAppendPartialDefaultsToIncremental(t *testing.T) {
+	t.Parallel()
+
+	s := &Stream{}
+	got := s.appendPartial("", "hello") + s.appendPartial("", " world")
+	if got != "hellohello world" {
+		// first call returns "hello" (partial=""), second returns "hello world".
+		// sum is "hello" + "hello world" = "hellohello world".
+		t.Fatalf("default-merge partials = %q", got)
+	}
+}
+
 func TestDialErrorIncludesHTTPDetails(t *testing.T) {
 	t.Parallel()
 

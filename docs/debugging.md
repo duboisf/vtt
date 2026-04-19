@@ -41,6 +41,6 @@ The JSON response contains all spans with their tags (attributes) and logs (even
 | `vocis.capture_target` | `capture.source` = `xdotool` (X11 path) or `extension` (gnome path). If the extension path, look for the nested `vocis.gnome.get_focused_window` span with the D-Bus call timing/error. |
 | `vocis.transcribe.connect` | Connection time — slow means network or backend issues. `transcribe.backend` = `openai` or `lemonade`. |
 | `vocis.transcribe.finalize` | Total finalization time — if this is slow, the "Wrapping up" countdown may expire. |
-| `vocis.transcribe.wait_final` | `segment_count`, `trailing.skipped` — whether trailing audio was processed. |
-| `vocis.postprocess` | `skipped` attribute, `first_token_timeout` vs `first_token_received` events, `elapsed` timings. |
+| `vocis.transcribe.wait_final` | `segment_count`, `trailing.skipped`. Also carries inline events: `realtime.delta` (once per delta), `realtime.completed`, `realtime.failed` — each with `since_commit_ms` so you can see when Whisper's first pass landed vs when the redundant second pass finished. |
+| `vocis.postprocess` | `skipped` attribute, `first_token_timeout` vs `first_token_received` events, `elapsed` timings. Inline events: `postprocess.input` (with `input.text`) and `postprocess.output` (with `output.text` + `skipped`/`reason` when PP fell back). Text is truncated to 500 chars. |
 | `vocis.inject` | Paste vs type, terminal detection, target window. |

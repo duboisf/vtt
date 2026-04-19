@@ -43,6 +43,10 @@ func newLemonadeTransport(
 
 func (t *lemonadeTransport) SampleRate() int { return lemonadeSampleRate }
 
+func (t *lemonadeTransport) MergePartialDelta(existing, delta string) string {
+	return mergeCumulativeDelta(existing, delta)
+}
+
 func (t *lemonadeTransport) Dial(ctx context.Context) (*websocket.Conn, error) {
 	wsURL, err := t.buildURL()
 	if err != nil {
