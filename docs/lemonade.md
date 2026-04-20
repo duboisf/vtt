@@ -135,13 +135,15 @@ Observations:
   `speech_stopped`, or delta events — so `streaming.show_partial_overlay`
   must be false (config validation enforces this).
 - To still chunk a long hold into multiple segments in manual-commit
-  mode, enable `streaming.client_vad: true`. vocis then runs an
-  energy-threshold pause detector on the client side (see
-  [`internal/transcribe/clientvad.go`](../internal/transcribe/clientvad.go))
-  and sends `input_audio_buffer.commit` whenever it detects
-  `silence_duration_ms` of silence, producing one `completed` per
+  mode, enable `streaming.client_vad: true`. vocis then runs Silero
+  VAD client-side via ONNX Runtime (see
+  [`internal/transcribe/silero.go`](../internal/transcribe/silero.go))
+  and sends `input_audio_buffer.commit` whenever the model reports
+  `silence_duration_ms` of non-speech, producing one `completed` per
   utterance without waiting for hotkey release. Requires
-  `manual_commit: true`.
+  `manual_commit: true` and `libonnxruntime.so` installed (vocis
+  auto-discovers the library or takes an explicit path via
+  `streaming.onnxruntime_library`).
 
 ### Known quirks
 

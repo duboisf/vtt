@@ -878,13 +878,26 @@ func (s *DictationSession) run(
 	// Client-side VAD drives mid-session pause commits when configured.
 	// Only active when manual_commit is on (server VAD is off) — the
 	// config validator enforces this pairing.
-	var vad VAD
+	var vad *SileroVAD
 	if client.streaming.ClientVAD && client.streaming.ManualCommit {
-		v, err := buildVAD(client.streaming, sampleRate)
-		if err != nil {
-			sessionlog.Warnf("client VAD setup failed, falling back to no client VAD: %v", err)
+		if err := initSilero(client.streaming.OnnxruntimeLibrary); err != nil {
+			sessionlog.Warnf("silero VAD init failed, disabling client VAD: %v", err)
+		} else if sampleRate != sileroSampleRate {
+			sessionlog.Warnf("silero VAD expects 16 kHz but sampleRate=%d; disabling client VAD", sampleRate)
+		} else if v, err := NewSileroVAD(
+			client.streaming.SilenceDurationMS,
+			client.streaming.PrefixPaddingMS,
+			client.streaming.MinUtteranceMS,
+		); err != nil {
+			sessionlog.Warnf("silero VAD construction failed, disabling client VAD: %v", err)
 		} else {
 			vad = v
+			sessionlog.Infof(
+				"client VAD (silero): silence=%dms prefix=%dms min_utterance=%dms",
+				client.streaming.SilenceDurationMS,
+				client.streaming.PrefixPaddingMS,
+				client.streaming.MinUtteranceMS,
+			)
 		}
 	}
 
@@ -909,7 +922,7 @@ func (s *DictationSession) run(
 func (s *DictationSession) maybePauseCommit(
 	ctx context.Context,
 	stream *Stream,
-	vad VAD,
+	vad *SileroVAD,
 	chunk []int16,
 ) {
 	if vad == nil {
@@ -1013,7 +1026,7 @@ func (s *DictationSession) streamAudio(
 	ctx context.Context,
 	stream *Stream,
 	samples <-chan []int16,
-	vad VAD,
+	vad *SileroVAD,
 ) {
 	lastTrace := time.Now()
 	for {
@@ -1042,8 +1055,8 @@ func (s *DictationSession) streamAudio(
 			if vad != nil && time.Since(lastTrace) > 500*time.Millisecond {
 				snap := vad.Snapshot()
 				sessionlog.Debugf(
-					"client VAD: in_speech=%t last=%.4f max=%.4f min=%.4f mean=%+.4f floor=%.4f eff_thr=%.4f silence_ms=%d speech_ms=%d",
-					snap.InSpeech, snap.LastRMS, snap.MaxRMS, snap.MinRMS, snap.LastMean, snap.NoiseFloor, snap.EffectiveThr, snap.SilenceMs, snap.SpeechMs,
+					"client VAD: in_speech=%t last=%.4f max=%.4f min=%.4f silence_ms=%d speech_ms=%d",
+					snap.InSpeech, snap.LastProb, snap.MaxProb, snap.MinProb, snap.SilenceMs, snap.SpeechMs,
 				)
 				lastTrace = time.Now()
 			}

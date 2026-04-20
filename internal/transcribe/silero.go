@@ -37,6 +37,16 @@ var (
 	sileroOutputNames = []string{"output", "stateN"}
 )
 
+// VADEvent is the state transition reported by Feed. VADNone means the
+// chunk was processed but the in-speech state didn't change.
+type VADEvent int
+
+const (
+	VADNone VADEvent = iota
+	VADSpeechStarted
+	VADSpeechStopped
+)
+
 // Global ONNX runtime + session state. The runtime and compiled model
 // graph are expensive to set up (~50-100 ms), so we do it once per
 // process and share the session across dictation sessions. Each
@@ -120,11 +130,9 @@ func resolveOnnxruntimeLibrary(configured string) (string, error) {
 
 // SileroVAD wraps the shared Silero session with per-instance hidden
 // state and a ring buffer that collects incoming recorder chunks until
-// a full 512-sample window is ready for inference. The hysteresis state
-// machine (minSpeechMs / minSilenceMs / minUtteranceMs) is the same as
-// ClientVAD — Silero just replaces the "is this frame speech?"
-// decision with a neural-net probability check instead of an RMS
-// comparison.
+// a full 512-sample window is ready for inference. A hysteresis state
+// machine (minSpeechMs / minSilenceMs / minUtteranceMs) on top of the
+// per-frame probability debounces the event stream.
 type SileroVAD struct {
 	sampleRate     int
 	minSilenceMs   int
@@ -305,10 +313,10 @@ func (v *SileroVAD) Feed(samples []int16) VADEvent {
 }
 
 // applyHysteresis converts per-frame speech probability into VAD
-// events using the same state machine as ClientVAD. Kept here rather
-// than factored out because the two detectors have slightly different
-// diagnostic fields and copy-pasting 20 lines is cheaper than forcing
-// a shared helper through an interface.
+// events. minSpeechMs suppresses triggering on single-frame blips,
+// minSilenceMs keeps a sentence-level pause from splitting mid-word,
+// and minUtteranceMs suppresses commits on episodes too short for
+// Whisper to transcribe reliably.
 func (v *SileroVAD) applyHysteresis(prob float64) VADEvent {
 	if prob >= sileroSpeechThreshold {
 		v.speechMs += sileroWindowMs
@@ -348,16 +356,25 @@ func (v *SileroVAD) Reset() {
 	// cleared across commits.
 }
 
-func (v *SileroVAD) Snapshot() VADSnapshot {
-	return VADSnapshot{
-		InSpeech:     v.inSpeech,
-		LastRMS:      v.lastProb, // overloaded: probability, not RMS
-		EffectiveThr: sileroSpeechThreshold,
-		MinRMS:       v.minProb,
-		MaxRMS:       v.maxProb,
-		SilenceMs:    v.silenceMs,
-		SpeechMs:     v.speechMs,
-	}
+// VADSnapshot is a point-in-time view of the detector for diagnostic
+// logging. All probabilities are Silero's 0-1 speech-confidence score;
+// MinProb/MaxProb are running extremes across the session.
+type VADSnapshot struct {
+	InSpeech  bool
+	LastProb  float64
+	MinProb   float64
+	MaxProb   float64
+	SilenceMs int
+	SpeechMs  int
 }
 
-var _ VAD = (*SileroVAD)(nil)
+func (v *SileroVAD) Snapshot() VADSnapshot {
+	return VADSnapshot{
+		InSpeech:  v.inSpeech,
+		LastProb:  v.lastProb,
+		MinProb:   v.minProb,
+		MaxProb:   v.maxProb,
+		SilenceMs: v.silenceMs,
+		SpeechMs:  v.speechMs,
+	}
+}

@@ -45,8 +45,8 @@ func TestSileroRealSpeech(t *testing.T) {
 	for i := 0; i+sileroWindowSamples <= len(samples); i += sileroWindowSamples {
 		vad.Feed(samples[i : i+sileroWindowSamples])
 		snap := vad.Snapshot()
-		if snap.LastRMS > maxProb {
-			maxProb = snap.LastRMS
+		if snap.LastProb > maxProb {
+			maxProb = snap.LastProb
 		}
 		if windows < 5 || windows%200 == 0 {
 			// Sum of abs hidden-state values — a good liveness
@@ -59,7 +59,7 @@ func TestSileroRealSpeech(t *testing.T) {
 					stateSum += float64(v)
 				}
 			}
-			t.Logf("window %d: prob=%.4f state_sum=%.4f", windows, snap.LastRMS, stateSum)
+			t.Logf("window %d: prob=%.4f state_sum=%.4f", windows, snap.LastProb, stateSum)
 		}
 		windows++
 	}

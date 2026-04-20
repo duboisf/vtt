@@ -132,17 +132,10 @@ type StreamingConfig struct {
 	// reliably on ~1s+ segments; shorter clips produce unstable output.
 	// Only meaningful when ClientVAD is on.
 	MinUtteranceMS int `yaml:"min_utterance_ms"`
-	// VADBackend picks the client-side voice-activity-detection
-	// implementation. "rms" (default) is an adaptive energy-threshold
-	// detector with no external dependencies. "silero" runs the
-	// Silero neural VAD via ONNX Runtime — more robust on noisy mics
-	// but requires libonnxruntime.so installed and OnnxruntimeLibrary
-	// set. Only meaningful when ClientVAD is on.
-	VADBackend string `yaml:"vad_backend"`
-	// OnnxruntimeLibrary is the absolute path to libonnxruntime.so,
-	// required when VADBackend is "silero". No default — users must
-	// install ONNX Runtime themselves (the library isn't bundled) and
-	// point at it here.
+	// OnnxruntimeLibrary is an optional absolute path to
+	// libonnxruntime.so. When empty, vocis auto-discovers the library
+	// from common install locations (/usr/local/lib, /usr/lib, etc.).
+	// Only consulted when ClientVAD is on.
 	OnnxruntimeLibrary string `yaml:"onnxruntime_library"`
 	// WaitFinalSeconds is the minimum time to wait for the trailing transcript
 	// after Finalize commits the audio buffer. Cloud backends answer in under
@@ -250,7 +243,6 @@ func Default() Config {
 			Threshold:          0.5,
 			ManualCommit:       false,
 			MinUtteranceMS:     1000,
-			VADBackend:         "silero",
 			WaitFinalSeconds:   3,
 		},
 		Insertion: InsertionConfig{
@@ -502,12 +494,6 @@ func (c Config) Validate() error {
 
 	if c.Streaming.ClientVAD && !c.Streaming.ManualCommit {
 		return errors.New("streaming.client_vad requires streaming.manual_commit=true (otherwise server VAD and client VAD race to commit)")
-	}
-
-	switch c.Streaming.VADBackend {
-	case "", "rms", "silero":
-	default:
-		return fmt.Errorf("streaming.vad_backend must be rms or silero, got %q", c.Streaming.VADBackend)
 	}
 
 	if c.Overlay.Width < 200 || c.Overlay.Height < 80 {
