@@ -11,7 +11,7 @@ internal/app/       ← orchestration via interfaces (no platform imports)
     ↓
 internal/hotkey/    ← state machine, parsing (platform-agnostic)
 internal/ui/        ← drawing, text, easing (platform-agnostic)
-internal/openai/    ← transcription (OpenAI + Lemonade backends) + post-processing
+internal/transcribe/    ← transcription (OpenAI + Lemonade backends) + post-processing
 internal/recorder/  ← PulseAudio capture
 internal/audio/     ← volume ducking
     ↓
@@ -39,11 +39,11 @@ A future Wayland backend would add `internal/platform/wayland/` satisfying the s
 - [`internal/ui/text.go`](/home/fred/git/vtt/internal/ui/text.go): text utilities — `Shorten`, `WrapLines`, `TextLimit`, `ShouldAnimatePartial`, `ListeningBody`.
 - [`internal/config/config.go`](/home/fred/git/vtt/internal/config/config.go): default config, validation, load/save, template expansion for overlay text.
 - [`internal/recorder/recorder.go`](/home/fred/git/vtt/internal/recorder/recorder.go): in-process PulseAudio/PipeWire microphone capture and live sample stream.
-- [`internal/openai/transcribe.go`](/home/fred/git/vtt/internal/openai/transcribe.go): realtime transcription orchestration — connect with retries, buffered audio handoff, turn assembly, finalization. Backend-agnostic; differences live behind `Transport`.
-- [`internal/openai/transport.go`](/home/fred/git/vtt/internal/openai/transport.go): `Transport` interface (Dial, SessionUpdate, SampleRate) — abstracts backend-specific connect, auth, payload shape, and PCM rate.
-- [`internal/openai/transport_openai.go`](/home/fred/git/vtt/internal/openai/transport_openai.go): OpenAI realtime transport — ephemeral client secret auth, 24 kHz PCM, nested `session.audio.input.transcription` payload.
-- [`internal/openai/transport_lemonade.go`](/home/fred/git/vtt/internal/openai/transport_lemonade.go): local Lemonade Server transport — no auth, 16 kHz PCM, flat `session.model` payload, model passed via `?model=` query.
-- [`internal/openai/postprocess.go`](/home/fred/git/vtt/internal/openai/postprocess.go): LLM post-processing to clean up filler words and hesitations. Backend-agnostic — uses OpenAI-compatible `/chat/completions`, so it works against either backend via `base_url`.
+- [`internal/transcribe/transcribe.go`](/home/fred/git/vtt/internal/transcribe/transcribe.go): realtime transcription orchestration — connect with retries, buffered audio handoff, turn assembly, finalization. Backend-agnostic; differences live behind `Transport`.
+- [`internal/transcribe/transport.go`](/home/fred/git/vtt/internal/transcribe/transport.go): `Transport` interface (Dial, SessionUpdate, SampleRate) — abstracts backend-specific connect, auth, payload shape, and PCM rate.
+- [`internal/transcribe/transport_openai.go`](/home/fred/git/vtt/internal/transcribe/transport_openai.go): OpenAI realtime transport — ephemeral client secret auth, 24 kHz PCM, nested `session.audio.input.transcription` payload.
+- [`internal/transcribe/transport_lemonade.go`](/home/fred/git/vtt/internal/transcribe/transport_lemonade.go): local Lemonade Server transport — no auth, 16 kHz PCM, flat `session.model` payload, model passed via `?model=` query.
+- [`internal/transcribe/postprocess.go`](/home/fred/git/vtt/internal/transcribe/postprocess.go): LLM post-processing to clean up filler words and hesitations. Backend-agnostic — uses OpenAI-compatible `/chat/completions`, so it works against either backend via `base_url`.
 - [`internal/audio/duck.go`](/home/fred/git/vtt/internal/audio/duck.go): lower speaker volume during recording via `wpctl`.
 - [`internal/securestore/keyring.go`](/home/fred/git/vtt/internal/securestore/keyring.go): keyring-backed API key storage.
 - [`internal/sessionlog/sessionlog.go`](/home/fred/git/vtt/internal/sessionlog/sessionlog.go): per-session logs on disk with DEBUG/INFO/WARN/ERROR levels.
@@ -63,13 +63,13 @@ A future Wayland backend would add `internal/platform/wayland/` satisfying the s
 - `hotkey.State` receives raw press/release events from any backend
 - `ui.*` provides drawing primitives to any overlay backend
 - `platform/x11/*` implements `OverlayUI`, `InjectorClient`, and `HotkeySource` for X11
-- `openai.DictationSession` owns realtime stream readiness, connect retries, turn assembly
-- `openai.PostProcess` handles LLM cleanup with timeout and fallback
+- `transcribe.DictationSession` owns realtime stream readiness, connect retries, turn assembly
+- `transcribe.PostProcess` handles LLM cleanup with timeout and fallback
 
 ## Useful rule of thumb
 
 - if the bug is about when recording starts or stops → `app` and `hotkey`
-- if the bug is about missed words or audio timing → `recorder` and `openai`
+- if the bug is about missed words or audio timing → `recorder` and `transcribe`
 - if the bug is about pasting into the wrong place → `platform/x11/injector`
 - if the bug is about what the user sees → `platform/x11/overlay` and `ui`
 - if the bug is about post-processing quality → check the prompt in `config`

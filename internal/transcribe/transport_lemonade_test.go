@@ -1,4 +1,4 @@
-package openai
+package transcribe
 
 import (
 	"context"
@@ -34,7 +34,7 @@ func TestLemonadeTransportBuildsRealtimeURL(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := config.OpenAIConfig{
+			cfg := config.TranscriptionConfig{
 				Backend:     config.BackendLemonade,
 				RealtimeURL: tc.raw,
 				Model:       tc.model,
@@ -69,7 +69,7 @@ func TestLemonadeTransportBuildsRealtimeURL(t *testing.T) {
 func TestLemonadeTransportSessionUpdateShape(t *testing.T) {
 	t.Parallel()
 
-	cfg := config.OpenAIConfig{
+	cfg := config.TranscriptionConfig{
 		Backend:  config.BackendLemonade,
 		Model:    "Whisper-Tiny",
 		Language: "en",
@@ -78,6 +78,7 @@ func TestLemonadeTransportSessionUpdateShape(t *testing.T) {
 		PrefixPaddingMS:   300,
 		SilenceDurationMS: 500,
 		Threshold:         0.02,
+		ManualCommit:      false,
 	}
 	transport := newLemonadeTransport(cfg, streaming, time.Second)
 
@@ -119,9 +120,53 @@ func TestLemonadeTransportSessionUpdateShape(t *testing.T) {
 	}
 }
 
+// TestLemonadeTransportSessionUpdateManualCommit verifies that
+// streaming.manual_commit=true emits `turn_detection: null` on the wire,
+// which is the signal Lemonade PR #1607 honors by disabling server-side
+// VAD and interim transcription work.
+func TestLemonadeTransportSessionUpdateManualCommit(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.TranscriptionConfig{
+		Backend: config.BackendLemonade,
+		Model:   "Whisper-Tiny",
+	}
+	streaming := config.StreamingConfig{
+		PrefixPaddingMS:   300,
+		SilenceDurationMS: 500,
+		Threshold:         0.02,
+		ManualCommit:      true,
+	}
+	transport := newLemonadeTransport(cfg, streaming, time.Second)
+
+	payload := transport.SessionUpdate()
+	session, ok := payload["session"].(map[string]any)
+	if !ok {
+		t.Fatalf("session is not a map: %T", payload["session"])
+	}
+
+	// In-memory: the key is present and its value is nil.
+	td, present := session["turn_detection"]
+	if !present {
+		t.Fatal("session.turn_detection key must be present (explicit null)")
+	}
+	if td != nil {
+		t.Fatalf("turn_detection = %v, want nil", td)
+	}
+
+	// On the wire: encoding/json must emit JSON null, not omit the field.
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(raw), `"turn_detection":null`) {
+		t.Fatalf("wire payload missing turn_detection:null, got %s", string(raw))
+	}
+}
+
 func TestLemonadeTransportSampleRate(t *testing.T) {
 	t.Parallel()
-	transport := newLemonadeTransport(config.OpenAIConfig{Backend: config.BackendLemonade}, config.StreamingConfig{}, time.Second)
+	transport := newLemonadeTransport(config.TranscriptionConfig{Backend: config.BackendLemonade}, config.StreamingConfig{}, time.Second)
 	if got := transport.SampleRate(); got != 16000 {
 		t.Fatalf("SampleRate = %d, want 16000", got)
 	}
@@ -168,12 +213,12 @@ func TestClientLemonadeBackendDialsWithoutClientSecret(t *testing.T) {
 	// httptest.NewServer returns an http://127.0.0.1:PORT URL — feed it as
 	// the lemonade RealtimeURL so the transport upgrades it to ws://.
 	cfg := config.Default()
-	cfg.OpenAI.Backend = config.BackendLemonade
-	cfg.OpenAI.RealtimeURL = server.URL
-	cfg.OpenAI.Model = "Whisper-Tiny"
-	cfg.OpenAI.BaseURL = server.URL // not used for transcribe but keeps SDK happy
+	cfg.Transcription.Backend = config.BackendLemonade
+	cfg.Transcription.RealtimeURL = server.URL
+	cfg.Transcription.Model = "Whisper-Tiny"
+	cfg.Transcription.BaseURL = server.URL // not used for transcribe but keeps SDK happy
 
-	client := New("", cfg.OpenAI, cfg.Streaming)
+	client := New("", cfg.Transcription, cfg.Streaming)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 

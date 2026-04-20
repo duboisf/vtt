@@ -12,7 +12,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"vocis/internal/config"
-	"vocis/internal/openai"
+	"vocis/internal/transcribe"
 	"vocis/internal/platform"
 	"vocis/internal/recorder"
 	"vocis/internal/securestore"
@@ -25,7 +25,7 @@ type App struct {
 	overlay        OverlayUI
 	recorder       *recorder.Recorder
 	injector       InjectorClient
-	transcribe     *openai.Client
+	transcribe     *transcribe.Client
 	store          *securestore.Store
 	apiKey         string
 	ducker         AudioDucker
@@ -47,7 +47,7 @@ type recordingState struct {
 	id        uint64
 	startedAt time.Time
 	session   *recorder.Session
-	dictation *openai.DictationSession
+	dictation *transcribe.DictationSession
 	cancel    context.CancelFunc
 	target      platform.Target
 	liveText    string
@@ -141,7 +141,7 @@ func (a *App) Run(ctx context.Context) error {
 	sessionlog.Infof("starting vocis session")
 	recorder.CleanupStale()
 
-	if a.cfg.OpenAI.Backend == config.BackendLemonade {
+	if a.cfg.Transcription.Backend == config.BackendLemonade {
 		// Lemonade runs locally with no auth.
 		a.apiKey = ""
 	} else {
@@ -153,7 +153,7 @@ func (a *App) Run(ctx context.Context) error {
 	}
 
 	a.recorder = recorder.New()
-	a.transcribe = openai.New(a.apiKey, a.cfg.OpenAI, a.cfg.Streaming)
+	a.transcribe = transcribe.New(a.apiKey, a.cfg.Transcription, a.cfg.Streaming)
 
 	defer a.overlay.Close()
 
@@ -276,12 +276,12 @@ func (a *App) reloadConfig() {
 		sessionlog.Warnf("config reload failed, keeping current: %v", err)
 		return
 	}
-	a.cfg.OpenAI = cfg.OpenAI
+	a.cfg.Transcription = cfg.Transcription
 	a.cfg.Recording = cfg.Recording
 	a.cfg.Streaming = cfg.Streaming
 	a.cfg.PostProcess = cfg.PostProcess
 	a.cfg.LogWindowTitle = cfg.LogWindowTitle
-	a.transcribe = openai.New(a.apiKey, a.cfg.OpenAI, a.cfg.Streaming)
+	a.transcribe = transcribe.New(a.apiKey, a.cfg.Transcription, a.cfg.Streaming)
 	sessionlog.Infof("config reloaded: %s", path)
 }
 
@@ -337,11 +337,11 @@ func (a *App) startRecordingLocked(ctx context.Context) {
 		span:      recordingSpan,
 		spanCtx:   spanCtx,
 	}
-	dictation, err := a.transcribe.StartDictation(recordCtx, openai.DictationOpts{
+	dictation, err := a.transcribe.StartDictation(recordCtx, transcribe.DictationOpts{
 		SampleRate: a.cfg.Recording.SampleRate,
 		Channels:   a.cfg.Recording.Channels,
 		Samples:    session.Samples(),
-		Callbacks: openai.ConnectCallbacks{
+		Callbacks: transcribe.ConnectCallbacks{
 			OnConnecting: func(attempt, max int) {
 				a.overlay.SetConnecting(attempt, max)
 				recordingSpan.AddEvent("overlay.connecting",
@@ -596,7 +596,7 @@ func (a *App) finishRecording(ctx context.Context, state *recordingState) {
 		)
 
 		ppCtx, ppCancel := context.WithCancel(ppSpanCtx)
-		resultCh := make(chan openai.PostProcessResult, 1)
+		resultCh := make(chan transcribe.PostProcessResult, 1)
 		go func() {
 			resultCh <- a.transcribe.PostProcess(ppCtx, a.cfg.PostProcess, text, func() {
 				remaining := totalDuration - firstTokenDuration
@@ -606,14 +606,14 @@ func (a *App) finishRecording(ctx context.Context, state *recordingState) {
 			})
 		}()
 
-		var result openai.PostProcessResult
+		var result transcribe.PostProcessResult
 		select {
 		case result = <-resultCh:
 		case <-escapeCh:
 			ppCancel()
 			ppSpan.AddEvent("postprocess.cancelled_by_user")
 			sessionlog.Infof("post-processing skipped by user (Escape)")
-			result = openai.PostProcessResult{Text: text, Skipped: true}
+			result = transcribe.PostProcessResult{Text: text, Skipped: true}
 		}
 		ppCancel()
 
@@ -693,7 +693,7 @@ func (a *App) estimateFinishTimeout(state *recordingState) time.Duration {
 	if estimate < innerFloor {
 		estimate = innerFloor
 	}
-	cap := time.Duration(a.cfg.OpenAI.RequestLimit) * time.Second
+	cap := time.Duration(a.cfg.Transcription.RequestLimit) * time.Second
 	if estimate > cap {
 		estimate = cap
 	}
@@ -759,7 +759,7 @@ func addOverlayEvent(span trace.Span, name string, attrs ...attribute.KeyValue) 
 }
 
 func isNoSpeechError(err error) bool {
-	return errors.Is(err, openai.ErrInputAudioBufferCommitEmpty) ||
+	return errors.Is(err, transcribe.ErrInputAudioBufferCommitEmpty) ||
 		strings.Contains(err.Error(), "transcription came back empty")
 }
 
@@ -827,10 +827,10 @@ func (a *App) consumeDictationEvents(ctx context.Context, state *recordingState)
 func (a *App) handleDictationEvent(
 	ctx context.Context,
 	state *recordingState,
-	event openai.DictationEvent,
+	event transcribe.DictationEvent,
 ) error {
 	switch event.Type {
-	case openai.DictationEventPartial:
+	case transcribe.DictationEventPartial:
 		if !a.cfg.Streaming.ShowPartialOverlay {
 			return nil
 		}
@@ -840,7 +840,7 @@ func (a *App) handleDictationEvent(
 		a.overlay.SetListeningText(state.target.WindowClass, renderPreview(state.displayText, state.currentPartial))
 		return nil
 
-	case openai.DictationEventSegment:
+	case transcribe.DictationEventSegment:
 		text := strings.TrimSpace(event.Text)
 		if text == "" {
 			return nil

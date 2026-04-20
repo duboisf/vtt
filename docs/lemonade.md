@@ -126,8 +126,22 @@ Observations:
 - Only `model` and `turn_detection` are honored. Other OpenAI realtime
   session fields (response modalities, voice, tools) are silently
   ignored.
-- `turn_detection: null` (or omitting it) disables server VAD — useful
-  for client-driven commit flows.
+- `turn_detection: null` disables server VAD and the interim
+  transcription work that otherwise runs in parallel with commit
+  ([lemonade #1607](https://github.com/lemonade-sdk/lemonade/pull/1607)).
+  vocis opts into this via `streaming.manual_commit: true`. In this
+  mode Lemonade buffers audio until the client sends
+  `input_audio_buffer.commit` and never emits `speech_started`,
+  `speech_stopped`, or delta events — so `streaming.show_partial_overlay`
+  must be false (config validation enforces this).
+- To still chunk a long hold into multiple segments in manual-commit
+  mode, enable `streaming.client_vad: true`. vocis then runs an
+  energy-threshold pause detector on the client side (see
+  [`internal/transcribe/clientvad.go`](../internal/transcribe/clientvad.go))
+  and sends `input_audio_buffer.commit` whenever it detects
+  `silence_duration_ms` of silence, producing one `completed` per
+  utterance without waiting for hotkey release. Requires
+  `manual_commit: true`.
 
 ### Known quirks
 
@@ -136,7 +150,7 @@ Observations:
   `completed`. This adds ~2–3 s per turn on current hardware and the
   args used in the second pass are identical to the first — you cannot
   tune it away via `session.update`. See
-  [`internal/openai/transcribe.go`](../internal/openai/transcribe.go)
+  [`internal/transcribe/transcribe.go`](../internal/transcribe/transcribe.go)
   spans `vocis.transcribe.wait_final` for the live gap (`first_event_ms`
   vs `completed_ms`).
 - **Cumulative deltas under Whisper (not incremental).** Per OpenAI's
@@ -153,11 +167,6 @@ Observations:
   (case-insensitive) and `mergeIncrementalDelta` otherwise. `Stream`
   is wired with this strategy at construction; neither `Transport`
   implementation knows about delta semantics.
-- **Silence hallucinations.** On silent or near-silent audio Whisper
-  often emits repeated phrases into the delta stream (`"Thank you. Thank
-  you. Thank you…"`). The `completed` event usually contains the
-  canonical single copy, so trust `completed` over the accumulated
-  partial.
 - **Commit race.** If the client sends `commit` immediately after the
   last audio append, VAD may not have scheduled the
   `speech_stopped` event yet, and Lemonade will run an "empty commit"
@@ -221,7 +230,7 @@ POST http://localhost:13305/api/v1/chat/completions
 
 Standard OpenAI-compatible chat API. vocis uses this for post-processing
 transcripts (cleaning filler words, fixing casing) via the existing
-`openai.Client.PostProcess` path.
+`transcribe.Client.PostProcess` path.
 
 Streaming (`"stream": true`) works and emits standard `data:` SSE
 frames. To stream with `curl`, prefer `curl -N`; with `httpie` (`http`

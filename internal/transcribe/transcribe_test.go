@@ -1,4 +1,4 @@
-package openai
+package transcribe
 
 import (
 	"context"
@@ -117,12 +117,12 @@ func TestStartStreamAppendsPCMAndReturnsTranscript(t *testing.T) {
 	defer server.Close()
 
 	cfg := config.Default()
-	cfg.OpenAI.BaseURL = server.URL
-	cfg.OpenAI.Organization = "org_test"
-	cfg.OpenAI.Project = "proj_test"
-	cfg.OpenAI.Language = "en"
+	cfg.Transcription.BaseURL = server.URL
+	cfg.Transcription.Organization = "org_test"
+	cfg.Transcription.Project = "proj_test"
+	cfg.Transcription.Language = "en"
 
-	client := New("test-key", cfg.OpenAI, cfg.Streaming)
+	client := New("test-key", cfg.Transcription, cfg.Streaming)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
@@ -229,10 +229,10 @@ func TestStartStreamUsesPromptHintWhenConfigured(t *testing.T) {
 	defer server.Close()
 
 	cfg := config.Default()
-	cfg.OpenAI.BaseURL = server.URL
-	cfg.OpenAI.PromptHint = "Use technical spelling."
+	cfg.Transcription.BaseURL = server.URL
+	cfg.Transcription.PromptHint = "Use technical spelling."
 
-	client := New("test-key", cfg.OpenAI, cfg.Streaming)
+	client := New("test-key", cfg.Transcription, cfg.Streaming)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
@@ -317,9 +317,9 @@ func TestStartStreamKeepsFirstWordWhenCompletedTranscriptIsSuffix(t *testing.T) 
 	defer server.Close()
 
 	cfg := config.Default()
-	cfg.OpenAI.BaseURL = server.URL
+	cfg.Transcription.BaseURL = server.URL
 
-	client := New("test-key", cfg.OpenAI, cfg.Streaming)
+	client := New("test-key", cfg.Transcription, cfg.Streaming)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
@@ -560,8 +560,8 @@ func TestDialErrorIncludesHTTPDetails(t *testing.T) {
 	defer server.Close()
 
 	cfg := config.Default()
-	cfg.OpenAI.BaseURL = server.URL
-	client := New("test-key", cfg.OpenAI, cfg.Streaming)
+	cfg.Transcription.BaseURL = server.URL
+	client := New("test-key", cfg.Transcription, cfg.Streaming)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -626,9 +626,9 @@ func TestStartStreamEnablesServerVADForSegmentMode(t *testing.T) {
 	defer server.Close()
 
 	cfg := config.Default()
-	cfg.OpenAI.BaseURL = server.URL
+	cfg.Transcription.BaseURL = server.URL
 
-	client := New("test-key", cfg.OpenAI, cfg.Streaming)
+	client := New("test-key", cfg.Transcription, cfg.Streaming)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
@@ -796,9 +796,9 @@ func TestFinalizeReceivesTrailingSegmentAfterSamplesClose(t *testing.T) {
 	defer server.Close()
 
 	cfg := config.Default()
-	cfg.OpenAI.BaseURL = server.URL
+	cfg.Transcription.BaseURL = server.URL
 
-	client := New("test-key", cfg.OpenAI, cfg.Streaming)
+	client := New("test-key", cfg.Transcription, cfg.Streaming)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -906,9 +906,9 @@ func TestFinalizeSucceedsWhenCommitEmptyArrivesViaFinals(t *testing.T) {
 	defer server.Close()
 
 	cfg := config.Default()
-	cfg.OpenAI.BaseURL = server.URL
+	cfg.Transcription.BaseURL = server.URL
 
-	client := New("test-key", cfg.OpenAI, cfg.Streaming)
+	client := New("test-key", cfg.Transcription, cfg.Streaming)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 

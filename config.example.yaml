@@ -2,7 +2,7 @@ hotkey: ctrl+shift+space
 hotkey_mode: hold
 log_window_title: false
 
-openai:
+transcription:
   # backend: "openai" (default) uses the OpenAI realtime API with an API key.
   # Set to "lemonade" to use a local Lemonade Server instead. With Lemonade:
   #   base_url:     REST API, default port 13305 (used for postprocess)
@@ -42,10 +42,41 @@ recording:
   duck_volume: 0.1
 
 streaming:
+  # Live-subtitle overlay showing interim transcripts as you speak.
+  # Requires manual_commit=false (server-side VAD must be on so the
+  # backend streams interim results).
   show_partial_overlay: true
   prefix_padding_ms: 300
   silence_duration_ms: 500
   threshold: 0.5
+  # manual_commit: disables server-side VAD on Lemonade and commits the
+  # audio buffer explicitly when the hotkey is released. Trades live
+  # partials for lower end-of-utterance latency (Lemonade stops running
+  # an interim transcription in parallel with the final). OpenAI backend
+  # ignores this flag. Must be paired with show_partial_overlay=false.
+  manual_commit: false
+  # client_vad: runs an energy-threshold pause detector client-side and
+  # sends input_audio_buffer.commit every time you pause, chunking a
+  # long hold into several transcribed segments instead of one big one
+  # at release. Requires manual_commit=true. Reuses the threshold /
+  # silence_duration_ms / prefix_padding_ms knobs above.
+  client_vad: false
+  # min_utterance_ms: minimum accumulated speech an episode needs
+  # before a pause can trigger a mid-session commit. Segments shorter
+  # than this are suppressed and roll into the next utterance (or the
+  # hotkey-release commit). Whisper produces unreliable output on
+  # sub-1s clips, so 1000 is the default.
+  min_utterance_ms: 1000
+  # vad_backend: which client-side VAD to use when client_vad=true.
+  #   rms    — energy-threshold detector, no external deps (default).
+  #   silero — neural VAD via ONNX Runtime. More robust on noisy mics
+  #            but requires libonnxruntime.so installed and the path
+  #            set in onnxruntime_library.
+  vad_backend: rms
+  # onnxruntime_library: absolute path to libonnxruntime.so. Only used
+  # when vad_backend=silero. Download from
+  # https://github.com/microsoft/onnxruntime/releases and point here.
+  onnxruntime_library: ""
   # Minimum seconds to wait for the trailing transcript after Finalize
   # commits the audio buffer. Cloud backends answer in under a second;
   # bump this to 10-15 if you're using a local backend where Whisper

@@ -3,3 +3,7 @@ dist/
 .venv/
 /vocis
 /VOCIS
+# ONNX Runtime is a runtime dep (not bundled). Users download the
+# release tarball from microsoft/onnxruntime and it lands here —
+# keep it out of git.
+/onnxruntime-linux-*

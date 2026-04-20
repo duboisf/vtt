@@ -102,11 +102,11 @@ Important fields:
 - `hotkey`: global shortcut, for example `ctrl+shift+space`
 - `hotkey_mode`: `hold` or `toggle`, defaults to `hold`
 - `log_window_title`: log the title of the target window (default `false`)
-- `openai.model`: defaults to `gpt-4o-mini-transcribe`
-- `openai.organization`: optional org id when your key can access multiple orgs
-- `openai.project`: optional project id when your key should bill a specific project
-- `openai.language`: optional ISO-639-1 hint such as `en`
-- `openai.prompt_hint`: terminology and style hint for transcription (has a sensible default)
+- `transcription.model`: defaults to `gpt-4o-mini-transcribe`
+- `transcription.organization`: optional org id when your key can access multiple orgs
+- `transcription.project`: optional project id when your key should bill a specific project
+- `transcription.language`: optional ISO-639-1 hint such as `en`
+- `transcription.prompt_hint`: terminology and style hint for transcription (has a sensible default)
 - `recording.backend`: currently `auto` or `pulse`
 - `recording.device`: PulseAudio source name, or `default`
 - `recording.duck_volume`: lower speaker volume to this level while recording (0.0–1.0, default `0.1`; set to `0` to disable)

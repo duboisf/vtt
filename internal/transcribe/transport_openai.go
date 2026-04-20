@@ -1,4 +1,4 @@
-package openai
+package transcribe
 
 import (
 	"context"
@@ -19,7 +19,7 @@ import (
 const openaiSampleRate = 24000
 
 type openaiTransport struct {
-	cfg          config.OpenAIConfig
+	cfg          config.TranscriptionConfig
 	streaming    config.StreamingConfig
 	sdkClient    openaisdk.Client
 	dialer       websocket.Dialer
@@ -27,7 +27,7 @@ type openaiTransport struct {
 }
 
 func newOpenAITransport(
-	cfg config.OpenAIConfig,
+	cfg config.TranscriptionConfig,
 	streaming config.StreamingConfig,
 	sdk openaisdk.Client,
 	baseURL string,

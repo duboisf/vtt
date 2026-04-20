@@ -130,7 +130,7 @@ When the hotkey starts dictation:
 4. The overlay repositions to the monitor where the mouse pointer is.
 5. [`internal/recorder/recorder.go`](/home/fred/git/vtt/internal/recorder/recorder.go) starts local microphone capture immediately.
 6. The injector captures the active target window after capture has already started so focus can be restored later.
-7. [`internal/openai/transcribe.go`](/home/fred/git/vtt/internal/openai/transcribe.go) starts a `DictationSession`.
+7. [`internal/transcribe/transcribe.go`](/home/fred/git/vtt/internal/transcribe/transcribe.go) starts a `DictationSession`.
 8. The `DictationSession` creates the realtime transcription session through the OpenAI SDK and connects the WebSocket. If the connect fails, it retries up to 3 times (2s timeout per attempt).
 9. Audio chunks that arrive before the WebSocket is ready are buffered in memory inside the dictation session (`connectAndBuffer`).
 10. Once the WebSocket is ready, the overlay updates to "● Ready to type into {window}" and buffered audio is flushed, then live audio continues streaming (`streamAudio`).
@@ -149,7 +149,7 @@ When the hotkey stops dictation:
 2. The Escape key is temporarily grabbed for the finishing state.
 3. The overlay switches to the "Finishing" state with a heartbeat wave animation, showing the accumulated text and a countdown timer. The countdown is proportional to recording duration: `max(5s, duration/5)`.
 4. The user can press the hotkey during this state to cancel the in-flight transcription. The overlay shows "Cancelled — transcription discarded".
-5. [`internal/openai/transcribe.go`](/home/fred/git/vtt/internal/openai/transcribe.go) finalizes the `DictationSession` via `collectTrailing`:
+5. [`internal/transcribe/transcribe.go`](/home/fred/git/vtt/internal/transcribe/transcribe.go) finalizes the `DictationSession` via `collectTrailing`:
    - `drainPendingSegments`: collects any segment results that arrived between recording stop and finalization (250ms window).
    - If all audio was consumed by live segments and no trailing audio remains, finalization returns immediately.
    - Otherwise, `stream.Commit` sends the trailing audio and `waitForFinal` waits for the transcript with a proportional timeout.

@@ -12,7 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"vocis/internal/config"
-	"vocis/internal/openai"
+	"vocis/internal/transcribe"
 	"vocis/internal/recorder"
 	"vocis/internal/securestore"
 	"vocis/internal/sessionlog"
@@ -71,7 +71,7 @@ func runTranscribe() error {
 	defer shutdownTelemetry(context.Background())
 
 	apiKey := ""
-	if cfg.OpenAI.Backend != config.BackendLemonade {
+	if cfg.Transcription.Backend != config.BackendLemonade {
 		key, err := securestore.New().APIKey()
 		if err != nil {
 			return fmt.Errorf("load api key: %w", err)
@@ -89,12 +89,12 @@ func runTranscribe() error {
 	}
 	defer recSession.Cleanup()
 
-	client := openai.New(apiKey, cfg.OpenAI, cfg.Streaming)
-	dictation, err := client.StartDictation(recordingCtx, openai.DictationOpts{
+	client := transcribe.New(apiKey, cfg.Transcription, cfg.Streaming)
+	dictation, err := client.StartDictation(recordingCtx, transcribe.DictationOpts{
 		SampleRate: recSession.SampleRate(),
 		Channels:   recSession.Channels(),
 		Samples:    recSession.Samples(),
-		Callbacks: openai.ConnectCallbacks{
+		Callbacks: transcribe.ConnectCallbacks{
 			OnConnecting: func(attempt, max int) {
 				sessionlog.Infof("realtime: connecting (attempt %d/%d)", attempt, max)
 			},
@@ -114,11 +114,11 @@ func runTranscribe() error {
 		defer close(eventsDone)
 		for ev := range dictation.Events() {
 			switch ev.Type {
-			case openai.DictationEventPartial:
+			case transcribe.DictationEventPartial:
 				if ev.Text != "" {
 					fmt.Fprintf(os.Stderr, "[partial] %s\n", ev.Text)
 				}
-			case openai.DictationEventSegment:
+			case transcribe.DictationEventSegment:
 				if ev.Text != "" {
 					fmt.Fprintf(os.Stderr, "[segment] %s\n", ev.Text)
 				}

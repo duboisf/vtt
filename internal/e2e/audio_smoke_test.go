@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"vocis/internal/config"
-	"vocis/internal/openai"
+	"vocis/internal/transcribe"
 	"vocis/internal/recorder"
 	"vocis/internal/securestore"
 	"vocis/internal/sessionlog"
@@ -47,7 +47,7 @@ func TestPiperAudioToRealtimeSmoke(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.Recording.Device = sourceName
-	cfg.OpenAI.RequestLimit = 60
+	cfg.Transcription.RequestLimit = 60
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -58,8 +58,8 @@ func TestPiperAudioToRealtimeSmoke(t *testing.T) {
 		t.Fatalf("start recorder: %v", err)
 	}
 
-	client := openai.New(apiKey, cfg.OpenAI, cfg.Streaming)
-	dictation, err := client.StartDictation(ctx, openai.DictationOpts{
+	client := transcribe.New(apiKey, cfg.Transcription, cfg.Streaming)
+	dictation, err := client.StartDictation(ctx, transcribe.DictationOpts{
 		SampleRate: cfg.Recording.SampleRate,
 		Channels:   cfg.Recording.Channels,
 		Samples:    recording.Samples(),
@@ -71,11 +71,11 @@ func TestPiperAudioToRealtimeSmoke(t *testing.T) {
 	go func() {
 		for event := range dictation.Events() {
 			switch event.Type {
-			case openai.DictationEventPartial:
+			case transcribe.DictationEventPartial:
 				if strings.TrimSpace(event.Text) != "" {
 					sessionlog.Infof("smoke partial: %s", event.Text)
 				}
-			case openai.DictationEventSegment:
+			case transcribe.DictationEventSegment:
 				sessionlog.Infof("smoke segment: %s", event.Text)
 			}
 		}

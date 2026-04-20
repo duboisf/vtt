@@ -48,7 +48,7 @@ Use --force to overwrite without diffing.`,
 var configBackendCmd = &cobra.Command{
 	Use:   "backend",
 	Short: "Pick the transcription backend (openai or lemonade)",
-	Long: `Interactively pick the backend and rewrite openai.backend plus the URL
+	Long: `Interactively pick the backend and rewrite transcription.backend plus the URL
 fields. Selecting lemonade probes http://localhost:13305/api/v1/health for the
 websocket_port and sets realtime_url accordingly; falls back to ws://localhost:9000
 when the probe fails.`,
@@ -187,7 +187,7 @@ func runConfigBackend() error {
 		return err
 	}
 
-	fmt.Printf("Current backend: %s\n\n", cfg.OpenAI.Backend)
+	fmt.Printf("Current backend: %s\n\n", cfg.Transcription.Backend)
 	fmt.Println("Available backends:")
 	fmt.Println("  1) openai    — hosted OpenAI realtime API (requires API key)")
 	fmt.Println("  2) lemonade  — local Lemonade Server (no auth, autodetected on localhost)")
@@ -200,15 +200,15 @@ func runConfigBackend() error {
 
 	switch strings.ToLower(strings.TrimSpace(choice)) {
 	case "1", "openai":
-		cfg.OpenAI.Backend = config.BackendOpenAI
-		cfg.OpenAI.BaseURL = "https://api.openai.com/v1"
-		cfg.OpenAI.RealtimeURL = ""
-		fmt.Printf("\nSet backend=openai\n  base_url=%s\n  realtime_url=(empty)\n", cfg.OpenAI.BaseURL)
+		cfg.Transcription.Backend = config.BackendOpenAI
+		cfg.Transcription.BaseURL = "https://api.openai.com/v1"
+		cfg.Transcription.RealtimeURL = ""
+		fmt.Printf("\nSet backend=openai\n  base_url=%s\n  realtime_url=(empty)\n", cfg.Transcription.BaseURL)
 	case "2", "lemonade":
-		cfg.OpenAI.Backend = config.BackendLemonade
+		cfg.Transcription.Backend = config.BackendLemonade
 		base, ws, detected := detectLemonade()
-		cfg.OpenAI.BaseURL = base
-		cfg.OpenAI.RealtimeURL = ws
+		cfg.Transcription.BaseURL = base
+		cfg.Transcription.RealtimeURL = ws
 		status := "used defaults (no server responded)"
 		if detected {
 			status = "detected running Lemonade Server"
@@ -279,16 +279,16 @@ func runConfigModels() error {
 		return err
 	}
 	if len(txModels) == 0 {
-		return fmt.Errorf("no transcription-capable models returned from backend %q", cfg.OpenAI.Backend)
+		return fmt.Errorf("no transcription-capable models returned from backend %q", cfg.Transcription.Backend)
 	}
 	if len(ppModels) == 0 {
-		return fmt.Errorf("no chat-capable models returned from backend %q", cfg.OpenAI.Backend)
+		return fmt.Errorf("no chat-capable models returned from backend %q", cfg.Transcription.Backend)
 	}
 
-	fmt.Printf("Backend: %s\n\n", cfg.OpenAI.Backend)
+	fmt.Printf("Backend: %s\n\n", cfg.Transcription.Backend)
 
-	fmt.Printf("Transcription model (current: %s)\n", cfg.OpenAI.Model)
-	newTx, err := pickModel(txModels, cfg.OpenAI.Model)
+	fmt.Printf("Transcription model (current: %s)\n", cfg.Transcription.Model)
+	newTx, err := pickModel(txModels, cfg.Transcription.Model)
 	if err != nil {
 		return err
 	}
@@ -299,25 +299,25 @@ func runConfigModels() error {
 		return err
 	}
 
-	cfg.OpenAI.Model = newTx
+	cfg.Transcription.Model = newTx
 	cfg.PostProcess.Model = newPP
 
 	if err := config.Save(path, cfg); err != nil {
 		return err
 	}
-	fmt.Printf("\nWrote %s\n  openai.model=%s\n  postprocess.model=%s\n",
-		path, cfg.OpenAI.Model, cfg.PostProcess.Model)
+	fmt.Printf("\nWrote %s\n  transcription.model=%s\n  postprocess.model=%s\n",
+		path, cfg.Transcription.Model, cfg.PostProcess.Model)
 	return nil
 }
 
 func fetchModels(cfg config.Config) (tx, pp []modelChoice, err error) {
-	switch cfg.OpenAI.Backend {
+	switch cfg.Transcription.Backend {
 	case config.BackendLemonade:
 		return fetchLemonadeModels(cfg)
 	case config.BackendOpenAI, "":
 		return fetchOpenAIModels(cfg)
 	default:
-		return nil, nil, fmt.Errorf("unknown backend %q", cfg.OpenAI.Backend)
+		return nil, nil, fmt.Errorf("unknown backend %q", cfg.Transcription.Backend)
 	}
 }
 
@@ -328,7 +328,7 @@ func fetchOpenAIModels(cfg config.Config) (tx, pp []modelChoice, err error) {
 		return nil, nil, err
 	}
 
-	baseURL := strings.TrimRight(cfg.OpenAI.BaseURL, "/")
+	baseURL := strings.TrimRight(cfg.Transcription.BaseURL, "/")
 	if baseURL == "" {
 		baseURL = "https://api.openai.com/v1"
 	}
@@ -341,10 +341,10 @@ func fetchOpenAIModels(cfg config.Config) (tx, pp []modelChoice, err error) {
 		return nil, nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+key)
-	if org := strings.TrimSpace(cfg.OpenAI.Organization); org != "" {
+	if org := strings.TrimSpace(cfg.Transcription.Organization); org != "" {
 		req.Header.Set("OpenAI-Organization", org)
 	}
-	if proj := strings.TrimSpace(cfg.OpenAI.Project); proj != "" {
+	if proj := strings.TrimSpace(cfg.Transcription.Project); proj != "" {
 		req.Header.Set("OpenAI-Project", proj)
 	}
 
@@ -412,9 +412,9 @@ func looksLikeOpenAIPPModel(id string) bool {
 }
 
 func fetchLemonadeModels(cfg config.Config) (tx, pp []modelChoice, err error) {
-	baseURL := strings.TrimRight(cfg.OpenAI.BaseURL, "/")
+	baseURL := strings.TrimRight(cfg.Transcription.BaseURL, "/")
 	if baseURL == "" {
-		return nil, nil, errors.New("openai.base_url is empty; run `vocis config backend` and pick lemonade first")
+		return nil, nil, errors.New("transcription.base_url is empty; run `vocis config backend` and pick lemonade first")
 	}
 
 	// show_all=true returns Lemonade's full registry (not just downloaded),

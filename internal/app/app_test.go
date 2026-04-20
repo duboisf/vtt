@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"vocis/internal/config"
-	"vocis/internal/openai"
+	"vocis/internal/transcribe"
 	"vocis/internal/platform"
 )
 
@@ -24,8 +24,8 @@ func TestHandleDictationEventUpdatesOverlayWithPartialText(t *testing.T) {
 		target: platform.Target{WindowClass: "Gedit"},
 	}
 
-	err := app.handleDictationEvent(context.Background(), state, openai.DictationEvent{
-		Type: openai.DictationEventPartial,
+	err := app.handleDictationEvent(context.Background(), state, transcribe.DictationEvent{
+		Type: transcribe.DictationEventPartial,
 		Text: "hello world",
 	})
 	if err != nil {
@@ -60,8 +60,8 @@ func TestPartialAppendsBelowAccumulatedSegments(t *testing.T) {
 		displayText: "Hello world.",
 	}
 
-	_ = app.handleDictationEvent(context.Background(), state, openai.DictationEvent{
-		Type: openai.DictationEventPartial,
+	_ = app.handleDictationEvent(context.Background(), state, transcribe.DictationEvent{
+		Type: transcribe.DictationEventPartial,
 		Text: "this is more",
 	})
 
@@ -92,8 +92,8 @@ func TestPartialReplacesPreviousPartial(t *testing.T) {
 		currentPartial: "this is",
 	}
 
-	_ = app.handleDictationEvent(context.Background(), state, openai.DictationEvent{
-		Type: openai.DictationEventPartial,
+	_ = app.handleDictationEvent(context.Background(), state, transcribe.DictationEvent{
+		Type: transcribe.DictationEventPartial,
 		Text: "this is more text",
 	})
 
@@ -121,8 +121,8 @@ func TestSegmentClearsPartial(t *testing.T) {
 		currentPartial: "this is mo",
 	}
 
-	_ = app.handleDictationEvent(context.Background(), state, openai.DictationEvent{
-		Type: openai.DictationEventSegment,
+	_ = app.handleDictationEvent(context.Background(), state, transcribe.DictationEvent{
+		Type: transcribe.DictationEventSegment,
 		Text: "this is more text, finalized.",
 	})
 
@@ -154,8 +154,8 @@ func TestEmptyPartialDoesNotFlashHelperWhenSegmentsExist(t *testing.T) {
 	// Set initial text so we can detect if it gets cleared.
 	fakeOverlay.listeningText = "Hello world."
 
-	_ = app.handleDictationEvent(context.Background(), state, openai.DictationEvent{
-		Type: openai.DictationEventPartial,
+	_ = app.handleDictationEvent(context.Background(), state, transcribe.DictationEvent{
+		Type: transcribe.DictationEventPartial,
 		Text: "",
 	})
 
@@ -181,8 +181,8 @@ func TestHandleDictationEventAccumulatesSegments(t *testing.T) {
 	app.recording = state
 
 	for _, seg := range []string{"segment one", " segment two"} {
-		err := app.handleDictationEvent(context.Background(), state, openai.DictationEvent{
-			Type: openai.DictationEventSegment,
+		err := app.handleDictationEvent(context.Background(), state, transcribe.DictationEvent{
+			Type: transcribe.DictationEventSegment,
 			Text: seg,
 		})
 		if err != nil {

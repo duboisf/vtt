@@ -52,26 +52,26 @@ const DefaultPromptHint = "Transcribe naturally for a programmer. " +
 	"Preserve obvious technical terms, acronyms, and capitalization when the audio supports them."
 
 type Config struct {
-	Hotkey         string            `yaml:"hotkey"`
-	HotkeyMode     string           `yaml:"hotkey_mode"`
-	LogWindowTitle bool             `yaml:"log_window_title"`
-	OpenAI         OpenAIConfig     `yaml:"openai"`
-	Recording      RecordingConfig  `yaml:"recording"`
-	Streaming      StreamingConfig  `yaml:"streaming"`
-	Insertion      InsertionConfig  `yaml:"insertion"`
-	Overlay        OverlayConfig    `yaml:"overlay"`
-	PostProcess    PostProcessConfig `yaml:"postprocess"`
-	Telemetry      TelemetryConfig  `yaml:"telemetry"`
-	YAMLIndent     int              `yaml:"yaml_indent"`
+	Hotkey         string              `yaml:"hotkey"`
+	HotkeyMode     string              `yaml:"hotkey_mode"`
+	LogWindowTitle bool                `yaml:"log_window_title"`
+	Transcription  TranscriptionConfig `yaml:"transcription"`
+	Recording      RecordingConfig     `yaml:"recording"`
+	Streaming      StreamingConfig     `yaml:"streaming"`
+	Insertion      InsertionConfig     `yaml:"insertion"`
+	Overlay        OverlayConfig       `yaml:"overlay"`
+	PostProcess    PostProcessConfig   `yaml:"postprocess"`
+	Telemetry      TelemetryConfig     `yaml:"telemetry"`
+	YAMLIndent     int                 `yaml:"yaml_indent"`
 }
 
 type PostProcessConfig struct {
-	Enabled                bool   `yaml:"enabled"`
-	Model                  string `yaml:"model"`
-	Prompt                 string `yaml:"prompt"`
-	MinWordCount           int    `yaml:"min_word_count"`
-	FirstTokenTimeoutSec   int    `yaml:"first_token_timeout_seconds"`
-	TotalTimeoutSec        int    `yaml:"total_timeout_seconds"`
+	Enabled              bool   `yaml:"enabled"`
+	Model                string `yaml:"model"`
+	Prompt               string `yaml:"prompt"`
+	MinWordCount         int    `yaml:"min_word_count"`
+	FirstTokenTimeoutSec int    `yaml:"first_token_timeout_seconds"`
+	TotalTimeoutSec      int    `yaml:"total_timeout_seconds"`
 }
 
 type TelemetryConfig struct {
@@ -79,7 +79,7 @@ type TelemetryConfig struct {
 	Endpoint string `yaml:"endpoint"`
 }
 
-type OpenAIConfig struct {
+type TranscriptionConfig struct {
 	Backend      string   `yaml:"backend"`
 	BaseURL      string   `yaml:"base_url"`
 	RealtimeURL  string   `yaml:"realtime_url"`
@@ -111,6 +111,39 @@ type StreamingConfig struct {
 	PrefixPaddingMS    int     `yaml:"prefix_padding_ms"`
 	SilenceDurationMS  int     `yaml:"silence_duration_ms"`
 	Threshold          float64 `yaml:"threshold"`
+	// ManualCommit disables server-side VAD for Lemonade and relies on the
+	// client-issued input_audio_buffer.commit at Finalize. Trades live partial
+	// transcripts (and the overlay that shows them) for lower end-of-utterance
+	// latency, since Lemonade stops running an interim transcription in
+	// parallel with the final. OpenAI backend ignores this flag.
+	ManualCommit bool `yaml:"manual_commit"`
+	// ClientVAD runs an energy-threshold voice activity detector on the
+	// client side and sends input_audio_buffer.commit whenever it detects
+	// a pause (silence_duration_ms of low-energy audio). Pauses chunk a
+	// long dictation into several transcribed segments without the user
+	// releasing the hotkey, cutting the end-of-utterance latency tied to
+	// Lemonade's post-commit Whisper pass. Requires ManualCommit=true
+	// (server VAD must be off or the two detectors would race).
+	ClientVAD bool `yaml:"client_vad"`
+	// MinUtteranceMS is the minimum accumulated speech duration an
+	// episode needs before a pause is allowed to trigger a commit.
+	// Shorter episodes reset silently and roll into the next utterance
+	// (or the final hotkey-release commit). Whisper transcribes
+	// reliably on ~1s+ segments; shorter clips produce unstable output.
+	// Only meaningful when ClientVAD is on.
+	MinUtteranceMS int `yaml:"min_utterance_ms"`
+	// VADBackend picks the client-side voice-activity-detection
+	// implementation. "rms" (default) is an adaptive energy-threshold
+	// detector with no external dependencies. "silero" runs the
+	// Silero neural VAD via ONNX Runtime — more robust on noisy mics
+	// but requires libonnxruntime.so installed and OnnxruntimeLibrary
+	// set. Only meaningful when ClientVAD is on.
+	VADBackend string `yaml:"vad_backend"`
+	// OnnxruntimeLibrary is the absolute path to libonnxruntime.so,
+	// required when VADBackend is "silero". No default — users must
+	// install ONNX Runtime themselves (the library isn't bundled) and
+	// point at it here.
+	OnnxruntimeLibrary string `yaml:"onnxruntime_library"`
 	// WaitFinalSeconds is the minimum time to wait for the trailing transcript
 	// after Finalize commits the audio buffer. Cloud backends answer in under
 	// a second; local backends running Whisper on CPU commonly need 5-15s for
@@ -129,20 +162,20 @@ type InsertionConfig struct {
 }
 
 type OverlayConfig struct {
-	Width          int             `yaml:"width"`
-	Height         int             `yaml:"height"`
-	MarginTop      int             `yaml:"margin_top"`
-	Opacity        float64         `yaml:"opacity"`
-	AutoHideMillis int             `yaml:"auto_hide_millis"`
-	Font           string          `yaml:"font"`
-	FontSize       float64         `yaml:"font_size"`
-	Branding       string          `yaml:"branding"`
-	Ready          OverlayReady    `yaml:"ready"`
-	Listening      OverlayListen   `yaml:"listening"`
-	Finishing      OverlayFinish   `yaml:"finishing"`
-	Success        OverlaySuccess  `yaml:"success"`
-	Error          OverlayError    `yaml:"error"`
-	Warning        OverlayWarning  `yaml:"warning"`
+	Width          int            `yaml:"width"`
+	Height         int            `yaml:"height"`
+	MarginTop      int            `yaml:"margin_top"`
+	Opacity        float64        `yaml:"opacity"`
+	AutoHideMillis int            `yaml:"auto_hide_millis"`
+	Font           string         `yaml:"font"`
+	FontSize       float64        `yaml:"font_size"`
+	Branding       string         `yaml:"branding"`
+	Ready          OverlayReady   `yaml:"ready"`
+	Listening      OverlayListen  `yaml:"listening"`
+	Finishing      OverlayFinish  `yaml:"finishing"`
+	Success        OverlaySuccess `yaml:"success"`
+	Error          OverlayError   `yaml:"error"`
+	Warning        OverlayWarning `yaml:"warning"`
 }
 
 type OverlayReady struct {
@@ -190,11 +223,11 @@ func Default() Config {
 	return Config{
 		Hotkey:     "ctrl+shift+space",
 		HotkeyMode: "hold",
-		OpenAI: OpenAIConfig{
-			Backend:    BackendOpenAI,
-			BaseURL:    "https://api.openai.com/v1",
-			Model:      "gpt-4o-mini-transcribe",
-			PromptHint: DefaultPromptHint,
+		Transcription: TranscriptionConfig{
+			Backend:      BackendOpenAI,
+			BaseURL:      "https://api.openai.com/v1",
+			Model:        "gpt-4o-mini-transcribe",
+			PromptHint:   DefaultPromptHint,
 			RequestLimit: 45,
 			Vocabulary: []string{
 				"OpenAI",
@@ -215,6 +248,9 @@ func Default() Config {
 			PrefixPaddingMS:    300,
 			SilenceDurationMS:  500,
 			Threshold:          0.5,
+			ManualCommit:       false,
+			MinUtteranceMS:     1000,
+			VADBackend:         "rms",
 			WaitFinalSeconds:   3,
 		},
 		Insertion: InsertionConfig{
@@ -336,12 +372,37 @@ func Load() (Config, string, error) {
 		return Config{}, "", err
 	}
 
+	if err := rejectDeprecatedKeys(path, data); err != nil {
+		return Config{}, "", err
+	}
+
 	cfg := Default()
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return Config{}, "", fmt.Errorf("decode %s: %w", path, err)
 	}
 
 	return cfg, path, cfg.Validate()
+}
+
+// rejectDeprecatedKeys fails loudly on config files that still use
+// pre-rename top-level keys. Strict by design: silently accepting the
+// old shape splits users across two spellings and hides the fact that
+// the section no longer describes OpenAI specifically.
+func rejectDeprecatedKeys(path string, data []byte) error {
+	var raw map[string]yaml.Node
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		// Bad YAML will surface on the real unmarshal below with a
+		// better error — don't preempt it here.
+		return nil
+	}
+	if _, ok := raw["openai"]; ok {
+		return fmt.Errorf(
+			"%s: top-level key `openai:` was renamed to `transcription:`. "+
+				"Rename the section in your config and try again.",
+			path,
+		)
+	}
+	return nil
 }
 
 func Save(path string, cfg Config) error {
@@ -367,14 +428,14 @@ func (c Config) Validate() error {
 		return errors.New("hotkey must not be empty")
 	}
 
-	if strings.TrimSpace(c.OpenAI.Model) == "" {
-		return errors.New("openai.model must not be empty")
+	if strings.TrimSpace(c.Transcription.Model) == "" {
+		return errors.New("transcription.model must not be empty")
 	}
 
-	switch c.OpenAI.Backend {
+	switch c.Transcription.Backend {
 	case "", BackendOpenAI, BackendLemonade:
 	default:
-		return fmt.Errorf("openai.backend must be %q or %q", BackendOpenAI, BackendLemonade)
+		return fmt.Errorf("transcription.backend must be %q or %q", BackendOpenAI, BackendLemonade)
 	}
 
 	switch c.HotkeyMode {
@@ -383,8 +444,8 @@ func (c Config) Validate() error {
 		return fmt.Errorf("hotkey_mode must be hold or toggle")
 	}
 
-	if c.OpenAI.RequestLimit <= 0 || c.OpenAI.RequestLimit > 300 {
-		return errors.New("openai.request_timeout_seconds must be between 1 and 300")
+	if c.Transcription.RequestLimit <= 0 || c.Transcription.RequestLimit > 300 {
+		return errors.New("transcription.request_timeout_seconds must be between 1 and 300")
 	}
 
 	switch c.Insertion.Mode {
@@ -429,6 +490,28 @@ func (c Config) Validate() error {
 
 	if c.Streaming.WaitFinalSeconds < 1 || c.Streaming.WaitFinalSeconds > 60 {
 		return errors.New("streaming.wait_final_seconds must be between 1 and 60")
+	}
+
+	if c.Streaming.MinUtteranceMS < 0 || c.Streaming.MinUtteranceMS > 10000 {
+		return errors.New("streaming.min_utterance_ms must be between 0 and 10000")
+	}
+
+	if c.Streaming.ManualCommit && c.Streaming.ShowPartialOverlay {
+		return errors.New("streaming.show_partial_overlay requires streaming.manual_commit=false (manual-commit mode disables server-side interim transcripts)")
+	}
+
+	if c.Streaming.ClientVAD && !c.Streaming.ManualCommit {
+		return errors.New("streaming.client_vad requires streaming.manual_commit=true (otherwise server VAD and client VAD race to commit)")
+	}
+
+	switch c.Streaming.VADBackend {
+	case "", "rms", "silero":
+	default:
+		return fmt.Errorf("streaming.vad_backend must be rms or silero, got %q", c.Streaming.VADBackend)
+	}
+
+	if c.Streaming.VADBackend == "silero" && c.Streaming.OnnxruntimeLibrary == "" {
+		return errors.New("streaming.vad_backend=silero requires streaming.onnxruntime_library (path to libonnxruntime.so)")
 	}
 
 	if c.Overlay.Width < 200 || c.Overlay.Height < 80 {

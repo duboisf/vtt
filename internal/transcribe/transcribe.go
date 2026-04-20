@@ -1,4 +1,4 @@
-package openai
+package transcribe
 
 import (
 	"context"
@@ -40,7 +40,7 @@ var ErrInputAudioBufferCommitEmpty = errors.New("input audio buffer commit empty
 // ---------------------------------------------------------------------------
 
 type Client struct {
-	cfg          config.OpenAIConfig
+	cfg          config.TranscriptionConfig
 	streaming    config.StreamingConfig
 	client       openaisdk.Client
 	chatStreamer chatCompletionStreamer
@@ -48,7 +48,7 @@ type Client struct {
 	writeTimeout time.Duration
 }
 
-func New(apiKey string, cfg config.OpenAIConfig, streaming config.StreamingConfig) *Client {
+func New(apiKey string, cfg config.TranscriptionConfig, streaming config.StreamingConfig) *Client {
 	timeout := time.Duration(cfg.RequestLimit) * time.Second
 
 	baseURL := strings.TrimRight(cfg.BaseURL, "/")
@@ -875,6 +875,19 @@ func (s *DictationSession) run(
 	sessionlog.Infof("realtime transcription stream ready")
 	go s.consumeStreamEvents(ctx)
 
+	// Client-side VAD drives mid-session pause commits when configured.
+	// Only active when manual_commit is on (server VAD is off) — the
+	// config validator enforces this pairing.
+	var vad VAD
+	if client.streaming.ClientVAD && client.streaming.ManualCommit {
+		v, err := buildVAD(client.streaming, sampleRate)
+		if err != nil {
+			sessionlog.Warnf("client VAD setup failed, falling back to no client VAD: %v", err)
+		} else {
+			vad = v
+		}
+	}
+
 	// Flush buffered audio that arrived while connecting.
 	for _, chunk := range buffered {
 		if err := stream.Append(ctx, chunk); err != nil {
@@ -882,10 +895,34 @@ func (s *DictationSession) run(
 			return
 		}
 		s.hasTrailing.Store(true)
+		s.maybePauseCommit(ctx, stream, vad, chunk)
 	}
 
 	// Stream live audio until the samples channel closes or context cancels.
-	s.streamAudio(ctx, stream, samples)
+	s.streamAudio(ctx, stream, samples, vad)
+}
+
+// maybePauseCommit feeds a chunk into the client VAD (if enabled) and
+// sends input_audio_buffer.commit when the VAD transitions to silence.
+// Idempotent when vad is nil. A commit failure is logged but not fatal —
+// the stream is still usable and Finalize will retry a final commit.
+func (s *DictationSession) maybePauseCommit(
+	ctx context.Context,
+	stream *Stream,
+	vad VAD,
+	chunk []int16,
+) {
+	if vad == nil {
+		return
+	}
+	if evt := vad.Feed(chunk); evt == VADSpeechStopped {
+		if err := stream.Commit(ctx); err != nil {
+			sessionlog.Warnf("client VAD pause commit failed: %v", err)
+			return
+		}
+		vad.Reset()
+		sessionlog.Debugf("client VAD pause commit sent")
+	}
 }
 
 // connectAndBuffer starts the WebSocket connection in the background and
@@ -969,7 +1006,16 @@ func (s *DictationSession) connectAndBuffer(
 }
 
 // streamAudio reads from the samples channel and appends to the stream.
-func (s *DictationSession) streamAudio(ctx context.Context, stream *Stream, samples <-chan []int16) {
+// If vad is non-nil, each chunk is also fed through the pause detector
+// and a commit is sent on speech_stopped — turning a long hold into
+// multiple transcribed segments without waiting for hotkey release.
+func (s *DictationSession) streamAudio(
+	ctx context.Context,
+	stream *Stream,
+	samples <-chan []int16,
+	vad VAD,
+) {
+	lastTrace := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
@@ -988,6 +1034,19 @@ func (s *DictationSession) streamAudio(ctx context.Context, stream *Stream, samp
 				return
 			}
 			s.hasTrailing.Store(true)
+			s.maybePauseCommit(ctx, stream, vad, chunk)
+
+			// Periodic VAD trace at ~500ms cadence. Shows what the
+			// detector is measuring so we can see whether the threshold
+			// is wrong vs whether chunks are stalling.
+			if vad != nil && time.Since(lastTrace) > 500*time.Millisecond {
+				snap := vad.Snapshot()
+				sessionlog.Debugf(
+					"client VAD: in_speech=%t rms=%.4f mean=%+.4f floor=%.4f eff_thr=%.4f silence_ms=%d speech_ms=%d",
+					snap.InSpeech, snap.LastRMS, snap.LastMean, snap.NoiseFloor, snap.EffectiveThr, snap.SilenceMs, snap.SpeechMs,
+				)
+				lastTrace = time.Now()
+			}
 		}
 	}
 }
@@ -1604,7 +1663,7 @@ func formatRealtimeError(code, message string) error {
 	return fmt.Errorf("%s (%s)", message, code)
 }
 
-func organization(cfg config.OpenAIConfig) string {
+func organization(cfg config.TranscriptionConfig) string {
 	if value := strings.TrimSpace(cfg.Organization); value != "" {
 		return value
 	}
@@ -1614,7 +1673,7 @@ func organization(cfg config.OpenAIConfig) string {
 	return strings.TrimSpace(os.Getenv("OPENAI_ORG_ID"))
 }
 
-func project(cfg config.OpenAIConfig) string {
+func project(cfg config.TranscriptionConfig) string {
 	if value := strings.TrimSpace(cfg.Project); value != "" {
 		return value
 	}

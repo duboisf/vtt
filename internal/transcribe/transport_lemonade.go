@@ -1,4 +1,4 @@
-package openai
+package transcribe
 
 import (
 	"context"
@@ -18,14 +18,14 @@ const (
 )
 
 type lemonadeTransport struct {
-	cfg       config.OpenAIConfig
+	cfg       config.TranscriptionConfig
 	streaming config.StreamingConfig
 	dialer    websocket.Dialer
 	rawURL    string
 }
 
 func newLemonadeTransport(
-	cfg config.OpenAIConfig,
+	cfg config.TranscriptionConfig,
 	streaming config.StreamingConfig,
 	timeout time.Duration,
 ) *lemonadeTransport {
@@ -84,6 +84,10 @@ func (t *lemonadeTransport) buildURL() (string, error) {
 }
 
 func (t *lemonadeTransport) SessionUpdate() map[string]any {
+	// Manual-commit mode sets turn_detection to JSON null (Go nil marshals
+	// to null under encoding/json). Lemonade PR #1607 honors null by
+	// disabling server-side VAD and the interim transcription work that
+	// otherwise ran in parallel with commit.
 	session := map[string]any{
 		"model":          t.cfg.Model,
 		"turn_detection": t.turnDetectionPayload(),
@@ -97,14 +101,22 @@ func (t *lemonadeTransport) SessionUpdate() map[string]any {
 	}
 }
 
-// turnDetectionPayload builds Lemonade's VAD config. Note that Lemonade's
-// `threshold` is RMS energy (0-1, default 0.01), NOT the 0-1 probability
-// OpenAI uses — they share a field name but not semantics. We pass
-// streaming.Threshold through unchanged so the user can tune it in config,
-// but vocis warns if the configured value looks like an OpenAI-shaped
-// threshold (> 0.1) that will almost certainly reject all speech against
-// Lemonade's RMS scale.
-func (t *lemonadeTransport) turnDetectionPayload() map[string]any {
+// turnDetectionPayload builds Lemonade's VAD config, or returns a true
+// nil (JSON null) when manual-commit mode is on. Return type is `any` so
+// the nil case serializes as `null` and compares equal to nil at the
+// interface level — returning a typed `map[string]any(nil)` would
+// JSON-encode as null but show up as non-nil when read back from the
+// surrounding map[string]any. Note that Lemonade's `threshold` is RMS
+// energy (0-1, default 0.01), NOT the 0-1 probability OpenAI uses — they
+// share a field name but not semantics. We pass streaming.Threshold
+// through unchanged so the user can tune it in config, but vocis warns
+// if the configured value looks like an OpenAI-shaped threshold (> 0.1)
+// that will almost certainly reject all speech against Lemonade's RMS
+// scale.
+func (t *lemonadeTransport) turnDetectionPayload() any {
+	if t.streaming.ManualCommit {
+		return nil
+	}
 	return map[string]any{
 		"threshold":           t.streaming.Threshold,
 		"silence_duration_ms": t.streaming.SilenceDurationMS,

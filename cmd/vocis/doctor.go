@@ -90,7 +90,7 @@ func runDoctor() error {
 		}
 	}
 
-	if cfg, _, err := config.Load(); err == nil && cfg.OpenAI.Backend == config.BackendLemonade {
+	if cfg, _, err := config.Load(); err == nil && cfg.Transcription.Backend == config.BackendLemonade {
 		checkLemonadeModels(cfg)
 	}
 
@@ -103,9 +103,9 @@ func runDoctor() error {
 // so a typo in config surfaces only as "no transcript ever arrives". This
 // check turns that into a boot-time diagnostic.
 func checkLemonadeModels(cfg config.Config) {
-	baseURL := strings.TrimRight(cfg.OpenAI.BaseURL, "/")
+	baseURL := strings.TrimRight(cfg.Transcription.BaseURL, "/")
 	if baseURL == "" {
-		fmt.Printf("%-14s missing (openai.base_url is empty; set it to the Lemonade REST endpoint, e.g. http://localhost:13305/api/v1)\n", "lemonade")
+		fmt.Printf("%-14s missing (transcription.base_url is empty; set it to the Lemonade REST endpoint, e.g. http://localhost:13305/api/v1)\n", "lemonade")
 		return
 	}
 	url := baseURL + "/models"
@@ -148,7 +148,7 @@ func checkLemonadeModels(cfg config.Config) {
 	}
 	fmt.Printf("%-14s ok (%d downloaded model(s) at %s)\n", "lemonade", len(available), url)
 
-	reportModel("lemonade-tx", cfg.OpenAI.Model, available)
+	reportModel("lemonade-tx", cfg.Transcription.Model, available)
 	if cfg.PostProcess.Enabled {
 		reportModel("lemonade-pp", cfg.PostProcess.Model, available)
 	}
