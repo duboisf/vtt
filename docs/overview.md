@@ -51,6 +51,13 @@ Core product choices:
   transcribes the chosen one on demand. No live transcription happens
   until you pick — cheap when idle, slight latency on pick.
 
-  Retention and ring-buffer size live under `recall:` in the config.
+  The ring buffer is memory-only by default — kill the daemon and the
+  buffer is gone, which keeps an always-on mic from leaving audio on
+  disk unintentionally. Set `recall.persist_dir` in the config to
+  opt into on-disk persistence (each segment mirrors to
+  `<dir>/seg-<id>.json`, retention is applied on reload).
+
+  Retention, ring-buffer size, and persistence live under `recall:` in
+  the config.
 
 If you only need the "what is this thing" version of the repo, stop here.

@@ -77,6 +77,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return fmt.Errorf("init silero: %w", err)
 	}
 
+	if err := d.initPersistence(); err != nil {
+		return fmt.Errorf("init persistence: %w", err)
+	}
+
 	path, err := ResolveSocketPath(d.cfg.Recall.SocketPath)
 	if err != nil {
 		return fmt.Errorf("resolve socket path: %w", err)
@@ -485,6 +489,63 @@ func peakAbs16(samples []int16) int16 {
 
 func writeErr(w io.Writer, err error) {
 	_ = json.NewEncoder(w).Encode(Response{Version: protocolVersion, Error: err.Error()})
+}
+
+// initPersistence opens the configured persist directory (if any),
+// reloads segments that still fit under the current retention, deletes
+// the ones that don't, and attaches the persister so future Add/Drop
+// operations mirror to disk. A nil persister (empty config) skips all
+// of this — the ring stays memory-only.
+func (d *Daemon) initPersistence() error {
+	dir := d.cfg.Recall.PersistDir
+	if dir == "" {
+		return nil
+	}
+	persister, err := NewFilePersister(dir)
+	if err != nil {
+		return err
+	}
+	loaded, err := persister.Load()
+	if err != nil {
+		return fmt.Errorf("load persisted segments: %w", err)
+	}
+
+	// Apply current retention to the loaded set. Segments outside the
+	// window are dropped from disk now — the user changed retention
+	// since the last run and those files are no longer wanted.
+	var keep []*Segment
+	var stale []*Segment
+	cutoff := time.Time{}
+	if d.cfg.Recall.RetentionSeconds > 0 {
+		cutoff = time.Now().Add(-time.Duration(d.cfg.Recall.RetentionSeconds) * time.Second)
+	}
+	for _, s := range loaded {
+		if !cutoff.IsZero() && s.StartedAt.Before(cutoff) {
+			stale = append(stale, s)
+			continue
+		}
+		keep = append(keep, s)
+	}
+
+	// Apply max-count bound too — oldest first.
+	if d.cfg.Recall.MaxSegments > 0 && len(keep) > d.cfg.Recall.MaxSegments {
+		drop := len(keep) - d.cfg.Recall.MaxSegments
+		stale = append(stale, keep[:drop]...)
+		keep = keep[drop:]
+	}
+
+	for _, s := range stale {
+		if err := persister.Delete(s.ID); err != nil {
+			sessionlog.Warnf("recall: prune persisted segment %d: %v", s.ID, err)
+		}
+	}
+
+	d.ring.Reload(keep)
+	d.ring.SetPersister(persister)
+
+	sessionlog.Infof("recall: persistence dir=%s, reloaded=%d segments, pruned=%d",
+		persister.Dir(), len(keep), len(stale))
+	return nil
 }
 
 // removeIfStaleSocket deletes a leftover socket file from a previous

@@ -114,6 +114,16 @@ type RecallConfig struct {
 	// monologue without a pause gets flushed at this boundary so the
 	// ring buffer can't grow unbounded from a single stream.
 	MaxSegmentSeconds int `yaml:"max_segment_seconds"`
+	// PersistDir is an optional directory where each captured segment
+	// is mirrored to disk as seg-<id>.json (raw PCM base64-encoded +
+	// metadata + cached transcript). When empty (default), the ring
+	// buffer is memory-only — nothing is ever written to disk, which
+	// is the privacy-preserving default for an always-on mic.
+	//
+	// Supports a leading ~/ expansion. Recommended path is somewhere
+	// under $XDG_STATE_HOME (e.g. ~/.local/state/vocis/recall). The
+	// daemon creates the directory with mode 0700 if it doesn't exist.
+	PersistDir string `yaml:"persist_dir"`
 }
 
 type TranscriptionConfig struct {

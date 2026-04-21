@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"vocis/internal/sessionlog"
 )
 
 // Segment is a single VAD-bounded speech episode held in the ring
@@ -32,14 +34,20 @@ type Segment struct {
 // Ring is a time- and count-bounded segment store. It is safe for
 // concurrent use. Eviction happens on Add and on every read — old
 // segments drop out even if nothing new is being added.
+//
+// An optional Persister mirrors mutations to disk; when nil the ring
+// is memory-only (the default). Persister calls happen *outside* the
+// ring's lock so slow I/O doesn't block the capture loop — the lock is
+// held only long enough to collect evicted segments into a slice.
 type Ring struct {
-	mu               sync.Mutex
-	segments         []*Segment
-	nextID           int64
-	maxSegments      int
-	retention        time.Duration
-	totalSeen        int64 // monotonic count for diagnostics
-	now              func() time.Time
+	mu          sync.Mutex
+	segments    []*Segment
+	nextID      int64
+	maxSegments int
+	retention   time.Duration
+	totalSeen   int64
+	now         func() time.Time
+	persister   Persister
 }
 
 // NewRing constructs a ring bounded by count and/or retention window.
@@ -54,30 +62,70 @@ func NewRing(maxSegments int, retention time.Duration) *Ring {
 	}
 }
 
-// Add installs a fully-captured segment and returns its assigned ID.
-// Older segments are evicted to satisfy the count + retention bounds.
-func (r *Ring) Add(seg *Segment) int64 {
+// SetPersister attaches a persister that mirrors mutations to disk.
+// Intended for daemon setup — in practice called once after Reload and
+// before the capture loop starts. Passing nil disables persistence.
+func (r *Ring) SetPersister(p Persister) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.persister = p
+}
 
+// Reload replaces the ring contents with the given segments (assumed
+// chronological, oldest-first) and advances nextID past the largest
+// loaded id. Does NOT enforce retention or max count — callers filter
+// beforehand so any disk cleanup can be paired with the in-memory drop.
+// Does not trigger persister writes; the segments are already on disk.
+func (r *Ring) Reload(segs []*Segment) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.segments = append(r.segments[:0], segs...)
+	r.nextID = 0
+	for _, s := range segs {
+		if s.ID > r.nextID {
+			r.nextID = s.ID
+		}
+	}
+	r.totalSeen = int64(len(segs))
+}
+
+// Add installs a fully-captured segment and returns its assigned ID.
+// Older segments are evicted to satisfy the count + retention bounds.
+// If a persister is attached, the new segment is saved and any evicted
+// files are deleted — both outside the lock.
+func (r *Ring) Add(seg *Segment) int64 {
+	r.mu.Lock()
 	r.nextID++
 	seg.ID = r.nextID
 	r.segments = append(r.segments, seg)
 	r.totalSeen++
+	evicted := r.evictLocked()
+	p := r.persister
+	r.mu.Unlock()
 
-	r.evictLocked()
+	if p != nil {
+		if err := p.Save(seg); err != nil {
+			sessionlog.Warnf("recall: persist segment %d: %v", seg.ID, err)
+		}
+		deleteEvicted(p, evicted)
+	}
 	return seg.ID
 }
 
 // List returns a shallow copy of currently-retained segments, oldest
 // first. PCM slices are shared — callers must treat them as read-only.
+// Evicted segments' files are deleted as a side effect.
 func (r *Ring) List() []*Segment {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	r.evictLocked()
+	evicted := r.evictLocked()
 	out := make([]*Segment, len(r.segments))
 	copy(out, r.segments)
+	p := r.persister
+	r.mu.Unlock()
+
+	if p != nil {
+		deleteEvicted(p, evicted)
+	}
 	return out
 }
 
@@ -85,40 +133,66 @@ func (r *Ring) List() []*Segment {
 // never existed.
 func (r *Ring) Get(id int64) (*Segment, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	r.evictLocked()
+	evicted := r.evictLocked()
+	var found *Segment
 	for _, s := range r.segments {
 		if s.ID == id {
-			return s, nil
+			found = s
+			break
 		}
 	}
-	return nil, fmt.Errorf("segment %d not found (evicted or unknown)", id)
+	p := r.persister
+	r.mu.Unlock()
+
+	if p != nil {
+		deleteEvicted(p, evicted)
+	}
+	if found == nil {
+		return nil, fmt.Errorf("segment %d not found (evicted or unknown)", id)
+	}
+	return found, nil
 }
 
 // Drop removes a segment by ID. Not an error if it was already evicted.
 func (r *Ring) Drop(id int64) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
+	var dropped bool
 	for i, s := range r.segments {
 		if s.ID == id {
 			r.segments = append(r.segments[:i], r.segments[i+1:]...)
-			return
+			dropped = true
+			break
+		}
+	}
+	p := r.persister
+	r.mu.Unlock()
+
+	if dropped && p != nil {
+		if err := p.Delete(id); err != nil {
+			sessionlog.Warnf("recall: delete persisted segment %d: %v", id, err)
 		}
 	}
 }
 
 // SetTranscript caches a transcript on the segment with the given ID.
-// No-op if the segment has already been evicted.
+// No-op if the segment has already been evicted. Rewrites the persisted
+// copy outside the lock so the on-disk record includes the transcript.
 func (r *Ring) SetTranscript(id int64, text string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
+	var updated *Segment
 	for _, s := range r.segments {
 		if s.ID == id {
 			s.Transcript = text
-			return
+			updated = s
+			break
+		}
+	}
+	p := r.persister
+	r.mu.Unlock()
+
+	if updated != nil && p != nil {
+		if err := p.Save(updated); err != nil {
+			sessionlog.Warnf("recall: persist transcript for segment %d: %v", id, err)
 		}
 	}
 }
@@ -134,9 +208,7 @@ type Stats struct {
 
 func (r *Ring) Stats() Stats {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	r.evictLocked()
+	evicted := r.evictLocked()
 	st := Stats{Count: len(r.segments), TotalSeen: r.totalSeen}
 	if len(r.segments) > 0 {
 		now := r.now()
@@ -146,20 +218,42 @@ func (r *Ring) Stats() Stats {
 			st.TotalFrames += int64(len(s.PCM))
 		}
 	}
+	p := r.persister
+	r.mu.Unlock()
+
+	if p != nil {
+		deleteEvicted(p, evicted)
+	}
 	return st
 }
 
 // evictLocked drops segments that fall outside the count or retention
-// bound. Caller must hold r.mu.
-func (r *Ring) evictLocked() {
+// bound and returns the evicted slice so callers can delete persisted
+// copies after releasing the lock. Caller must hold r.mu.
+func (r *Ring) evictLocked() []*Segment {
+	var evicted []*Segment
 	if r.retention > 0 {
 		cutoff := r.now().Add(-r.retention)
 		for len(r.segments) > 0 && r.segments[0].StartedAt.Before(cutoff) {
+			evicted = append(evicted, r.segments[0])
 			r.segments = r.segments[1:]
 		}
 	}
 	if r.maxSegments > 0 && len(r.segments) > r.maxSegments {
 		drop := len(r.segments) - r.maxSegments
+		evicted = append(evicted, r.segments[:drop]...)
 		r.segments = r.segments[drop:]
+	}
+	return evicted
+}
+
+// deleteEvicted best-effort removes the persisted copies for segments
+// the ring just dropped. Errors are logged but never propagate —
+// persistence is a convenience, not a correctness requirement.
+func deleteEvicted(p Persister, evicted []*Segment) {
+	for _, e := range evicted {
+		if err := p.Delete(e.ID); err != nil {
+			sessionlog.Warnf("recall: delete persisted segment %d: %v", e.ID, err)
+		}
 	}
 }
