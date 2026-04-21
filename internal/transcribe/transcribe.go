@@ -911,8 +911,10 @@ func (s *DictationSession) run(
 			s.finishPump(err)
 			return
 		}
-		s.hasTrailing.Store(true)
 		s.maybePauseCommit(ctx, stream, vad, chunk)
+		if vad == nil || vad.InSpeech() {
+			s.hasTrailing.Store(true)
+		}
 	}
 
 	// Stream live audio until the samples channel closes or context cancels.
@@ -1051,8 +1053,16 @@ func (s *DictationSession) streamAudio(
 				s.finishPump(err)
 				return
 			}
-			s.hasTrailing.Store(true)
 			s.maybePauseCommit(ctx, stream, vad, chunk)
+			// Mark uncommitted audio as "trailing" only when we
+			// believe it contains speech. During post-commit silence
+			// the chunks still flow to the server, but flagging them
+			// would defeat the release-time shortcut in
+			// collectTrailing, forcing a redundant final commit and
+			// wait for an (almost always empty) transcript.
+			if vad == nil || vad.InSpeech() {
+				s.hasTrailing.Store(true)
+			}
 
 			// Log client VAD only on state transitions so the trace
 			// shows when speech starts/stops rather than repeating
