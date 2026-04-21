@@ -54,10 +54,13 @@ inspect these first:
 
 | Span | What to look for |
 |------|-----------------|
-| `vocis.recall.capture` | One per VAD-bounded utterance the daemon kept. `segment.id`, `segment.duration_ms`, `segment.peak_level`, `segment.force_flushed` (true when `max_segment_seconds` cut it short). |
+| `vocis.recall.capture` | One per VAD-bounded utterance (kept **or** dropped). `segment.id` (0 if dropped), `segment.duration_ms`, `segment.peak_level`, `segment.avg_level` (RMS), `segment.force_flushed` (true when `max_segment_seconds` cut it short), `segment.dropped_as_silence` (true when peak/RMS filter fired), `segment.drop_reason` (empty or e.g. `"rms=0.003 < min_rms=0.005"`), plus the threshold values for context. |
 | `vocis.recall.transcribe` | One per daemon transcribe call. `segment.id`, `cache_hit`, `postprocess`, `transcript.length`, `runtime.goroutines_delta` (should be 0 — non-zero means we're leaking). Child spans: `…transcribe.feed`, `…transcribe.finalize`, `…transcribe.postprocess`. |
 
 `recall: transcribe id=N goroutines M→K (Δ=±X)` also lands in the
 daemon log per transcribe — use it as a quick sanity check when you
 don't want to spin up Jaeger. A positive Δ that doesn't come back down
 means goroutines are accumulating.
+
+For VAD-specific debugging (stuck-in-speech segments, hysteresis
+tuning, peak vs RMS filter decisions), see [docs/silero.md](silero.md).

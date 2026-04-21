@@ -137,8 +137,9 @@ Observations:
 - To still chunk a long hold into multiple segments in manual-commit
   mode, enable `streaming.client_vad: true`. vocis then runs Silero
   VAD client-side via ONNX Runtime (see
-  [`internal/transcribe/silero.go`](../internal/transcribe/silero.go))
-  and sends `input_audio_buffer.commit` whenever the model reports
+  [`internal/transcribe/silero.go`](../internal/transcribe/silero.go)
+  and [docs/silero.md](silero.md) for the design) and sends
+  `input_audio_buffer.commit` whenever the model reports
   `silence_duration_ms` of non-speech, producing one `completed` per
   utterance without waiting for hotkey release. Requires
   `manual_commit: true` and `libonnxruntime.so` installed (vocis
