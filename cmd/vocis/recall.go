@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -21,8 +20,9 @@ import (
 )
 
 var (
-	recallPickID          int64
+	recallPickSelection   string
 	recallPickPostprocess bool
+	recallPickJoin        string
 )
 
 var recallCmd = &cobra.Command{
@@ -49,10 +49,20 @@ SIGTERM) or until "vocis recall stop" asks it to exit.`,
 
 var recallPickCmd = &cobra.Command{
 	Use:   "pick",
-	Short: "Transcribe one of the recent segments",
-	Long: `Lists the current ring buffer and asks you to pick a segment by ID
-(interactive prompt, or --id to skip it). The daemon transcribes the
-segment and the final text is written to stdout.`,
+	Short: "Transcribe one or more of the recent segments",
+	Long: `Lists the current ring buffer and asks you to pick segments to
+transcribe. The selection accepts a comma-separated mix of:
+
+    3       single id
+    3-5     closed range (inclusive)
+    3-      id 3 and every newer segment
+    -5      every segment up to id 5
+    all, *  everything currently buffered
+
+Example: "3,5-7,10-" transcribes ids 3, 5, 6, 7, and anything ≥ 10.
+
+Transcripts for multiple segments are joined with a space (override with
+--join). Use --ids to skip the interactive prompt.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runRecallPick()
 	},
@@ -75,10 +85,12 @@ var recallStopCmd = &cobra.Command{
 }
 
 func init() {
-	recallPickCmd.Flags().Int64Var(&recallPickID, "id", 0,
-		"transcribe this segment id without showing the interactive picker")
+	recallPickCmd.Flags().StringVar(&recallPickSelection, "ids", "",
+		"selection string (e.g. \"3\", \"3-5\", \"3-\", \"-5\", \"all\", or a comma-separated mix) — skips the interactive prompt")
 	recallPickCmd.Flags().BoolVar(&recallPickPostprocess, "postprocess", false,
-		"run the configured LLM cleanup on the transcript before printing")
+		"run the configured LLM cleanup on each transcript before joining")
+	recallPickCmd.Flags().StringVar(&recallPickJoin, "join", " ",
+		"separator inserted between segment transcripts when selecting multiple")
 
 	recallCmd.AddCommand(recallStartCmd)
 	recallCmd.AddCommand(recallPickCmd)
@@ -134,32 +146,52 @@ func runRecallPick() error {
 	}
 	client := recall.NewClient(socket)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-
-	id := recallPickID
-	if id == 0 {
-		segs, err := client.List(ctx)
-		if err != nil {
-			return err
-		}
-		if len(segs) == 0 {
-			fmt.Fprintln(os.Stderr, "no segments in buffer yet — speak into the mic first")
-			return nil
-		}
-		printSegmentTable(os.Stderr, segs)
-		id, err = promptSegmentID(segs)
-		if err != nil {
-			return err
-		}
-	}
-
-	fmt.Fprintf(os.Stderr, "transcribing segment #%d...\n", id)
-	text, err := client.Transcribe(ctx, id, recallPickPostprocess)
+	// List runs on a short deadline; the transcribe calls each get their
+	// own deadline below. A single long deadline around everything would
+	// have to cover N transcriptions plus user thinking time at the
+	// prompt, which is awkward to bound.
+	listCtx, listCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	segs, err := client.List(listCtx)
+	listCancel()
 	if err != nil {
 		return err
 	}
-	fmt.Println(text)
+	if len(segs) == 0 {
+		fmt.Fprintln(os.Stderr, "no segments in buffer yet — speak into the mic first")
+		return nil
+	}
+
+	availableIDs := make([]int64, len(segs))
+	for i, s := range segs {
+		availableIDs[i] = s.ID
+	}
+
+	var ids []int64
+	if sel := strings.TrimSpace(recallPickSelection); sel != "" {
+		ids, err = recall.ParseSelection(sel, availableIDs)
+		if err != nil {
+			return err
+		}
+	} else {
+		printSegmentTable(os.Stderr, segs)
+		ids, err = promptSegmentSelection(availableIDs)
+		if err != nil {
+			return err
+		}
+	}
+
+	parts := make([]string, 0, len(ids))
+	for _, id := range ids {
+		fmt.Fprintf(os.Stderr, "transcribing segment #%d...\n", id)
+		txCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		text, err := client.Transcribe(txCtx, id, recallPickPostprocess)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("segment %d: %w", id, err)
+		}
+		parts = append(parts, strings.TrimSpace(text))
+	}
+	fmt.Println(strings.Join(parts, recallPickJoin))
 	return nil
 }
 
@@ -240,29 +272,21 @@ func truncateOneLine(s string, max int) string {
 	return s[:max-1] + "…"
 }
 
-// promptSegmentID reads a segment ID from stdin and validates it
-// against the list we fetched. Blank input picks the most recent one,
-// which is the common case.
-func promptSegmentID(segs []recall.SegmentInfo) (int64, error) {
-	latest := segs[len(segs)-1].ID
-	fmt.Fprintf(os.Stderr, "pick an id [default %d, latest]: ", latest)
+// promptSegmentSelection reads a selection string from stdin and turns
+// it into a concrete list of IDs to transcribe. Blank input defaults to
+// the most recent segment, which is the common case.
+func promptSegmentSelection(available []int64) ([]int64, error) {
+	latest := available[len(available)-1]
+	fmt.Fprintf(os.Stderr,
+		"pick [default %d=latest; accepts id, range like 3-5, open range 3-, or \"all\"]: ", latest)
 	reader := bufio.NewReader(os.Stdin)
 	line, err := reader.ReadString('\n')
 	if err != nil {
-		return 0, fmt.Errorf("read pick: %w", err)
+		return nil, fmt.Errorf("read pick: %w", err)
 	}
 	line = strings.TrimSpace(line)
 	if line == "" {
-		return latest, nil
+		return []int64{latest}, nil
 	}
-	id, err := strconv.ParseInt(line, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("not a valid id: %q", line)
-	}
-	for _, s := range segs {
-		if s.ID == id {
-			return id, nil
-		}
-	}
-	return 0, fmt.Errorf("id %d not in ring buffer — try one from the list above", id)
+	return recall.ParseSelection(line, available)
 }
