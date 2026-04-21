@@ -58,6 +58,15 @@ var (
 	sileroSession  *ort.DynamicAdvancedSession
 )
 
+// InitSilero is the exported entry point for callers outside the
+// transcribe package (e.g. `vocis recall`) that need Silero available
+// as a standalone VAD, without going through a dictation session.
+// It delegates to initSilero and has the same once-per-process
+// semantics.
+func InitSilero(libraryPath string) error {
+	return initSilero(libraryPath)
+}
+
 // initSilero loads the ONNX Runtime shared library and compiles the
 // Silero VAD graph from the embedded model bytes. Safe to call
 // repeatedly — the first call does the work, subsequent calls return
@@ -344,6 +353,12 @@ func (v *SileroVAD) applyHysteresis(prob float64) VADEvent {
 }
 
 func (v *SileroVAD) InSpeech() bool { return v.inSpeech }
+
+// SpeechMs returns the duration of the current speech run the VAD is
+// accumulating. It's non-zero while probabilities are above threshold —
+// including short bursts that never crossed minSpeechMs. Used by the
+// streaming pump to mark audio as "trailing" on sub-threshold blips.
+func (v *SileroVAD) SpeechMs() int { return v.speechMs }
 
 func (v *SileroVAD) Reset() {
 	v.inSpeech = false

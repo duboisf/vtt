@@ -912,7 +912,7 @@ func (s *DictationSession) run(
 			return
 		}
 		s.maybePauseCommit(ctx, stream, vad, chunk)
-		if vad == nil || vad.InSpeech() {
+		if vad == nil || vad.InSpeech() || vad.SpeechMs() > 0 {
 			s.hasTrailing.Store(true)
 		}
 	}
@@ -1060,7 +1060,7 @@ func (s *DictationSession) streamAudio(
 			// would defeat the release-time shortcut in
 			// collectTrailing, forcing a redundant final commit and
 			// wait for an (almost always empty) transcript.
-			if vad == nil || vad.InSpeech() {
+			if vad == nil || vad.InSpeech() || vad.SpeechMs() > 0 {
 				s.hasTrailing.Store(true)
 			}
 
