@@ -37,4 +37,20 @@ Core product choices:
 - all overlay text is configurable via named templates in the config file
 - audio ducking lowers speaker volume during recording to avoid mic feedback
 
+## Modes
+
+`vocis` has two dictation modes, run as separate subcommands:
+
+- **`vocis serve`** — the push-to-talk default described above: hotkey
+  starts/stops a dictation session, overlay is shown, transcript is
+  pasted into the focused app.
+- **`vocis recall`** (Wokis Recall) — always-on capture. The daemon
+  (`vocis recall start`) continuously records the mic, segments speech
+  with Silero VAD, and keeps a bounded ring buffer of recent utterances.
+  `vocis recall pick` shows the recent segments in a terminal picker and
+  transcribes the chosen one on demand. No live transcription happens
+  until you pick — cheap when idle, slight latency on pick.
+
+  Retention and ring-buffer size live under `recall:` in the config.
+
 If you only need the "what is this thing" version of the repo, stop here.

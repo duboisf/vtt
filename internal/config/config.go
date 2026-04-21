@@ -65,6 +65,7 @@ type Config struct {
 	Overlay        OverlayConfig       `yaml:"overlay"`
 	PostProcess    PostProcessConfig   `yaml:"postprocess"`
 	Telemetry      TelemetryConfig     `yaml:"telemetry"`
+	Recall         RecallConfig        `yaml:"recall"`
 	YAMLIndent     int                 `yaml:"yaml_indent"`
 }
 
@@ -80,6 +81,39 @@ type PostProcessConfig struct {
 type TelemetryConfig struct {
 	Enabled  bool   `yaml:"enabled"`
 	Endpoint string `yaml:"endpoint"`
+}
+
+// RecallConfig drives the always-on `vocis recall` daemon. The daemon
+// captures mic audio continuously, runs Silero VAD, and keeps a bounded
+// ring buffer of speech segments that the user can later transcribe via
+// `vocis recall pick`. See docs/overview.md for the user-facing shape.
+type RecallConfig struct {
+	// RetentionSeconds is how far back in time segments are kept. Older
+	// segments are evicted from the ring buffer even if MaxSegments
+	// isn't reached yet. 0 disables the time bound (count-only).
+	RetentionSeconds int `yaml:"retention_seconds"`
+	// MaxSegments caps the number of segments held in memory. Oldest is
+	// evicted when a new segment is added past this count. 0 disables
+	// the count bound (time-only).
+	MaxSegments int `yaml:"max_segments"`
+	// SocketPath is the Unix domain socket the daemon listens on and
+	// the pick subcommand connects to. Empty = auto-resolve under
+	// $XDG_RUNTIME_DIR/vocis/recall.sock (or /tmp fallback).
+	SocketPath string `yaml:"socket_path"`
+	// MinSilenceMS / MinSpeechMS / MinUtteranceMS mirror the Silero VAD
+	// hysteresis knobs in internal/transcribe/silero.go. They control
+	// when a speech episode starts, when it ends, and whether it's long
+	// enough to keep.
+	MinSilenceMS   int `yaml:"min_silence_ms"`
+	MinSpeechMS    int `yaml:"min_speech_ms"`
+	MinUtteranceMS int `yaml:"min_utterance_ms"`
+	// PrerollMS is how much audio before the VAD speech-start is
+	// included in the segment, so word onsets aren't clipped.
+	PrerollMS int `yaml:"preroll_ms"`
+	// MaxSegmentSeconds caps an individual segment's duration. A long
+	// monologue without a pause gets flushed at this boundary so the
+	// ring buffer can't grow unbounded from a single stream.
+	MaxSegmentSeconds int `yaml:"max_segment_seconds"`
 }
 
 type TranscriptionConfig struct {
@@ -321,6 +355,16 @@ func Default() Config {
 			Enabled:  false,
 			Endpoint: "localhost:4317",
 		},
+		Recall: RecallConfig{
+			RetentionSeconds:  600,
+			MaxSegments:       200,
+			SocketPath:        "",
+			MinSilenceMS:      500,
+			MinSpeechMS:       150,
+			MinUtteranceMS:    500,
+			PrerollMS:         300,
+			MaxSegmentSeconds: 30,
+		},
 		YAMLIndent: 2,
 	}
 }
@@ -501,6 +545,31 @@ func (c Config) Validate() error {
 
 	if c.Overlay.Width < 200 || c.Overlay.Height < 80 {
 		return errors.New("overlay dimensions are too small")
+	}
+
+	if c.Recall.RetentionSeconds < 0 || c.Recall.RetentionSeconds > 86400 {
+		return errors.New("recall.retention_seconds must be between 0 and 86400")
+	}
+	if c.Recall.MaxSegments < 0 || c.Recall.MaxSegments > 10000 {
+		return errors.New("recall.max_segments must be between 0 and 10000")
+	}
+	if c.Recall.RetentionSeconds == 0 && c.Recall.MaxSegments == 0 {
+		return errors.New("recall: at least one of retention_seconds or max_segments must be > 0")
+	}
+	if c.Recall.MinSilenceMS < 0 || c.Recall.MinSilenceMS > 5000 {
+		return errors.New("recall.min_silence_ms must be between 0 and 5000")
+	}
+	if c.Recall.MinSpeechMS < 0 || c.Recall.MinSpeechMS > 5000 {
+		return errors.New("recall.min_speech_ms must be between 0 and 5000")
+	}
+	if c.Recall.MinUtteranceMS < 0 || c.Recall.MinUtteranceMS > 10000 {
+		return errors.New("recall.min_utterance_ms must be between 0 and 10000")
+	}
+	if c.Recall.PrerollMS < 0 || c.Recall.PrerollMS > 5000 {
+		return errors.New("recall.preroll_ms must be between 0 and 5000")
+	}
+	if c.Recall.MaxSegmentSeconds < 1 || c.Recall.MaxSegmentSeconds > 300 {
+		return errors.New("recall.max_segment_seconds must be between 1 and 300")
 	}
 
 	c.validateOverlayTemplates()

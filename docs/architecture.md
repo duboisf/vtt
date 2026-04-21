@@ -26,7 +26,7 @@ A future Wayland backend would add `internal/platform/wayland/` satisfying the s
 
 ## Top-level entry points
 
-- [`cmd/vocis/`](/home/fred/git/vtt/cmd/vocis/): Cobra-based CLI with one file per command group (`root.go`, `serve.go`, `config_cmd.go`, `doctor.go`, `key.go`). `config_cmd.go` hosts the `config` parent plus `config init|backend|models` subcommands.
+- [`cmd/vocis/`](/home/fred/git/vtt/cmd/vocis/): Cobra-based CLI with one file per command group (`root.go`, `serve.go`, `config_cmd.go`, `doctor.go`, `key.go`, `recall.go`). `config_cmd.go` hosts the `config` parent plus `config init|backend|models` subcommands. `recall.go` hosts the `recall` parent plus `recall start|pick|status|stop` subcommands for the always-on Wokis Recall daemon.
 - [`README.md`](/home/fred/git/vtt/README.md): user-facing setup and usage
 - [`config.example.yaml`](/home/fred/git/vtt/config.example.yaml): config shape example
 
@@ -39,6 +39,7 @@ A future Wayland backend would add `internal/platform/wayland/` satisfying the s
 - [`internal/ui/text.go`](/home/fred/git/vtt/internal/ui/text.go): text utilities — `Shorten`, `WrapLines`, `TextLimit`, `ShouldAnimatePartial`, `ListeningBody`.
 - [`internal/config/config.go`](/home/fred/git/vtt/internal/config/config.go): default config, validation, load/save, template expansion for overlay text.
 - [`internal/recorder/recorder.go`](/home/fred/git/vtt/internal/recorder/recorder.go): in-process PulseAudio/PipeWire microphone capture and live sample stream.
+- [`internal/recall/`](/home/fred/git/vtt/internal/recall/): Wokis Recall daemon. `segment.go` holds the bounded ring buffer, `daemon.go` runs recorder + Silero VAD and exposes a Unix-socket control protocol, `client.go` is the pick/status/stop client, `protocol.go` defines the request/response JSON shapes. Segments are stored as raw 16 kHz int16 PCM; transcription is lazy — done only when the `pick` client requests it.
 - [`internal/transcribe/transcribe.go`](/home/fred/git/vtt/internal/transcribe/transcribe.go): realtime transcription orchestration — connect with retries, buffered audio handoff, turn assembly, finalization. Backend-agnostic; differences live behind `Transport`.
 - [`internal/transcribe/transport.go`](/home/fred/git/vtt/internal/transcribe/transport.go): `Transport` interface (Dial, SessionUpdate, SampleRate) — abstracts backend-specific connect, auth, payload shape, and PCM rate.
 - [`internal/transcribe/transport_openai.go`](/home/fred/git/vtt/internal/transcribe/transport_openai.go): OpenAI realtime transport — ephemeral client secret auth, 24 kHz PCM, nested `session.audio.input.transcription` payload.
@@ -75,5 +76,6 @@ A future Wayland backend would add `internal/platform/wayland/` satisfying the s
 - if the bug is about post-processing quality → check the prompt in `config`
 - if the bug is about volume levels → `audio`
 - if the bug is about hotkey detection or auto-repeat → `hotkey/state.go`
+- if the bug is about Wokis Recall (always-on mode) → `recall/daemon.go` (capture + VAD + socket) and `cmd/vocis/recall.go` (subcommands, picker)
 
 If you need execution details rather than file ownership, continue to `runtime-flow.md`.
