@@ -64,6 +64,7 @@ type persistedSegment struct {
 	DurationNS int64     `json:"duration_ns"`
 	SampleRate int       `json:"sample_rate"`
 	PeakLevel  float64   `json:"peak_level"`
+	AvgLevel   float64   `json:"avg_level,omitempty"`
 	Transcript string    `json:"transcript,omitempty"`
 	PCMBase64  string    `json:"pcm_b64"`
 }
@@ -78,6 +79,7 @@ func (p *FilePersister) Save(seg *Segment) error {
 		DurationNS: int64(seg.Duration),
 		SampleRate: seg.SampleRate,
 		PeakLevel:  seg.PeakLevel,
+		AvgLevel:   seg.AvgLevel,
 		Transcript: seg.Transcript,
 		PCMBase64:  encodePCM16(seg.PCM),
 	})
@@ -140,6 +142,7 @@ func (p *FilePersister) Load() ([]*Segment, error) {
 			SampleRate: ps.SampleRate,
 			PCM:        pcm,
 			PeakLevel:  ps.PeakLevel,
+			AvgLevel:   ps.AvgLevel,
 			Transcript: ps.Transcript,
 		})
 	}

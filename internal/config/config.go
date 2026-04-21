@@ -124,6 +124,16 @@ type RecallConfig struct {
 	// around 0.02 rejects fan/room tone while keeping quiet speech.
 	// Set to 0 to keep every segment (useful only for debugging).
 	MinSegmentPeak float64 `yaml:"min_segment_peak"`
+	// MinSegmentRMS is the minimum RMS (root mean square) sample level
+	// a finalized segment must have to be kept. RMS discriminates
+	// sustained energy from a silent segment that happens to contain
+	// a single loud click, which peak alone can't: a 24 s silence
+	// segment with one keyboard clack can easily have peak > 0.04
+	// while its RMS stays below 0.005. A value around 0.005 rejects
+	// near-silence while keeping genuinely quiet speech (speech RMS
+	// is typically 0.01-0.05 even at soft volumes). Set to 0 to
+	// disable the RMS filter and rely on peak alone.
+	MinSegmentRMS float64 `yaml:"min_segment_rms"`
 	// Persist controls whether captured segments are mirrored to disk.
 	// Default is memory-only — always-on mic audio does not land on
 	// disk unless the user explicitly opts in by setting mode=disk.
@@ -403,6 +413,7 @@ func Default() Config {
 			PrerollMS:         300,
 			MaxSegmentSeconds: 30,
 			MinSegmentPeak:    0.02,
+			MinSegmentRMS:     0.005,
 			Persist: RecallPersistConfig{
 				Mode: RecallPersistMemory,
 				Dir:  defaultRecallStateDir(),
@@ -635,6 +646,9 @@ func (c Config) Validate() error {
 	}
 	if c.Recall.MinSegmentPeak < 0 || c.Recall.MinSegmentPeak > 1 {
 		return errors.New("recall.min_segment_peak must be between 0 and 1")
+	}
+	if c.Recall.MinSegmentRMS < 0 || c.Recall.MinSegmentRMS > 1 {
+		return errors.New("recall.min_segment_rms must be between 0 and 1")
 	}
 	switch c.Recall.Persist.Mode {
 	case "", RecallPersistMemory, RecallPersistDisk:

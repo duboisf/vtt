@@ -38,16 +38,25 @@ type Response struct {
 
 	// Status
 	Stats *StatsInfo `json:"stats,omitempty"`
+
+	// GetAudio — raw 16-bit little-endian mono PCM base64-encoded.
+	// SampleRate is always the segment's capture rate (16 kHz for
+	// current Silero-based recall; encoded explicitly so callers can
+	// set their playback device correctly instead of assuming).
+	AudioPCMBase64 string `json:"audio_pcm_b64,omitempty"`
+	AudioSampleRate int   `json:"audio_sample_rate,omitempty"`
 }
 
 // SegmentInfo is the on-the-wire summary of a ring-buffer segment. PCM
 // is intentionally not included — clients don't need raw audio and the
-// daemon handles transcription itself.
+// daemon handles transcription itself (get_audio is the dedicated op
+// for replay).
 type SegmentInfo struct {
 	ID           int64     `json:"id"`
 	StartedAt    time.Time `json:"started_at"`
 	DurationMS   int       `json:"duration_ms"`
 	PeakLevel    float64   `json:"peak_level"`
+	AvgLevel     float64   `json:"avg_level"`
 	Transcribed  bool      `json:"transcribed"`
 	CachedText   string    `json:"cached_text,omitempty"`
 }
@@ -69,4 +78,5 @@ const (
 	OpDrop       = "drop"
 	OpStatus     = "status"
 	OpShutdown   = "shutdown"
+	OpGetAudio   = "get_audio"
 )

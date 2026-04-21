@@ -25,6 +25,7 @@ type Segment struct {
 	SampleRate int
 	PCM        []int16
 	PeakLevel  float64 // 0-1, peak absolute sample during the segment
+	AvgLevel   float64 // 0-1, RMS energy (sqrt(mean(sample^2))/32768)
 
 	// Cached transcript. Written once by the daemon after a successful
 	// transcribe request; read under the ring buffer lock.

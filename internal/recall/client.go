@@ -64,6 +64,21 @@ func (c *Client) Shutdown(ctx context.Context) error {
 	return err
 }
 
+// GetAudio returns the raw PCM samples and sample rate for a segment.
+// Used by `vocis recall replay` and any future audio debugging tools.
+// Samples are 16-bit mono at the returned sample rate.
+func (c *Client) GetAudio(ctx context.Context, id int64) ([]int16, int, error) {
+	resp, err := c.do(ctx, Request{Op: OpGetAudio, SegmentID: id})
+	if err != nil {
+		return nil, 0, err
+	}
+	pcm, err := decodePCM16(resp.AudioPCMBase64)
+	if err != nil {
+		return nil, 0, fmt.Errorf("decode pcm: %w", err)
+	}
+	return pcm, resp.AudioSampleRate, nil
+}
+
 func (c *Client) do(ctx context.Context, req Request) (Response, error) {
 	req.Version = protocolVersion
 

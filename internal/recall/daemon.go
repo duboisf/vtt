@@ -187,6 +187,7 @@ func (d *Daemon) runCapture(ctx context.Context) error {
 
 	var active *Segment
 	var activePeak int16
+	var activeSumSq int64
 
 	samples := recSession.Samples()
 	for {
@@ -223,18 +224,21 @@ func (d *Daemon) runCapture(ctx context.Context) error {
 				if p := peakAbs16(chunk); p > activePeak {
 					activePeak = p
 				}
+				activeSumSq = sumSquares16(prevPreroll) + sumSquares16(chunk)
 
 			case active != nil:
 				active.PCM = append(active.PCM, chunk...)
 				if p := peakAbs16(chunk); p > activePeak {
 					activePeak = p
 				}
+				activeSumSq += sumSquares16(chunk)
 			}
 
 			if active != nil && event == transcribe.VADSpeechStopped {
-				d.finalizeActive(active, activePeak, sampleRate, false)
+				d.finalizeActive(active, activePeak, activeSumSq, sampleRate, false)
 				active = nil
 				activePeak = 0
+				activeSumSq = 0
 			} else if active != nil && len(active.PCM) >= maxSegmentSamples {
 				// Monologue with no pause — flush so the ring buffer
 				// bound is enforceable and downstream transcription
@@ -242,38 +246,49 @@ func (d *Daemon) runCapture(ctx context.Context) error {
 				// segment that inherits the in-speech state; Silero
 				// will naturally report SpeechStopped when the real
 				// pause arrives.
-				d.finalizeActive(active, activePeak, sampleRate, true)
+				d.finalizeActive(active, activePeak, activeSumSq, sampleRate, true)
 				active = &Segment{
 					StartedAt:  time.Now(),
 					SampleRate: sampleRate,
 					PCM:        make([]int16, 0, sampleRate),
 				}
 				activePeak = 0
+				activeSumSq = 0
 			}
 		}
 	}
 }
 
-// finalizeActive stamps the final duration/peak onto the segment and,
-// if it looks like real speech, adds it to the ring buffer. Emits a
-// `vocis.recall.capture` trace span (a fresh root span, not attached to
-// the daemon context) so each captured utterance shows up as its own
-// trace in Jaeger. forceFlushed is true when MaxSegmentSeconds cut the
-// segment short rather than a natural VAD-stopped event.
+// finalizeActive stamps the final duration/peak/RMS onto the segment
+// and, if it looks like real speech, adds it to the ring buffer. Emits
+// a `vocis.recall.capture` trace span (a fresh root span, not attached
+// to the daemon context) so each captured utterance shows up as its
+// own trace in Jaeger. forceFlushed is true when MaxSegmentSeconds cut
+// the segment short rather than a natural VAD-stopped event.
 //
-// Segments whose peak level is below recall.min_segment_peak are
-// treated as silence/noise and dropped — Silero can get stuck
-// declaring in-speech on low-level ambient noise, which without this
-// filter fills the ring with 30 s force-flushed segments that Whisper
-// transcribes to the empty string.
-func (d *Daemon) finalizeActive(seg *Segment, peak int16, sampleRate int, forceFlushed bool) {
+// Segments are dropped as silence/noise when peak < min_segment_peak
+// (filters out below-noise-floor segments entirely) or RMS <
+// min_segment_rms (filters out mostly-silent segments with the
+// occasional click pop that peak alone would miss — the classic 24 s
+// near-silence with one keyboard clack). Both are logged so users can
+// see why a segment didn't land in the ring.
+func (d *Daemon) finalizeActive(seg *Segment, peak int16, sumSq int64, sampleRate int, forceFlushed bool) {
 	seg.Duration = time.Duration(len(seg.PCM)) * time.Second / time.Duration(sampleRate)
 	seg.PeakLevel = float64(peak) / 32768.0
+	if len(seg.PCM) > 0 {
+		seg.AvgLevel = math.Sqrt(float64(sumSq)/float64(len(seg.PCM))) / 32768.0
+	}
 
-	dropped := seg.PeakLevel < d.cfg.Recall.MinSegmentPeak
+	var dropReason string
+	switch {
+	case seg.PeakLevel < d.cfg.Recall.MinSegmentPeak:
+		dropReason = fmt.Sprintf("peak=%.4f < min_peak=%.4f", seg.PeakLevel, d.cfg.Recall.MinSegmentPeak)
+	case seg.AvgLevel < d.cfg.Recall.MinSegmentRMS:
+		dropReason = fmt.Sprintf("rms=%.4f < min_rms=%.4f", seg.AvgLevel, d.cfg.Recall.MinSegmentRMS)
+	}
 
 	var id int64
-	if !dropped {
+	if dropReason == "" {
 		id = d.ring.Add(seg)
 	}
 
@@ -283,19 +298,36 @@ func (d *Daemon) finalizeActive(seg *Segment, peak int16, sampleRate int, forceF
 		attribute.Int("segment.sample_count", len(seg.PCM)),
 		attribute.Int("segment.sample_rate", sampleRate),
 		attribute.Float64("segment.peak_level", seg.PeakLevel),
+		attribute.Float64("segment.avg_level", seg.AvgLevel),
 		attribute.Float64("segment.min_peak_threshold", d.cfg.Recall.MinSegmentPeak),
+		attribute.Float64("segment.min_rms_threshold", d.cfg.Recall.MinSegmentRMS),
 		attribute.Bool("segment.force_flushed", forceFlushed),
-		attribute.Bool("segment.dropped_as_silence", dropped),
+		attribute.Bool("segment.dropped_as_silence", dropReason != ""),
+		attribute.String("segment.drop_reason", dropReason),
 	)
 	telemetry.EndSpan(span, nil)
 
-	if dropped {
-		sessionlog.Infof("recall: dropped silence segment (%.2fs, peak=%.4f < min=%.4f, force_flushed=%t)",
-			seg.Duration.Seconds(), seg.PeakLevel, d.cfg.Recall.MinSegmentPeak, forceFlushed)
+	if dropReason != "" {
+		sessionlog.Infof("recall: dropped silence segment (%.2fs, peak=%.4f, rms=%.4f, force_flushed=%t, reason=%s)",
+			seg.Duration.Seconds(), seg.PeakLevel, seg.AvgLevel, forceFlushed, dropReason)
 		return
 	}
-	sessionlog.Infof("recall: captured segment #%d (%.2fs, peak=%.4f, force_flushed=%t)",
-		id, seg.Duration.Seconds(), seg.PeakLevel, forceFlushed)
+	sessionlog.Infof("recall: captured segment #%d (%.2fs, peak=%.4f, rms=%.4f, force_flushed=%t)",
+		id, seg.Duration.Seconds(), seg.PeakLevel, seg.AvgLevel, forceFlushed)
+}
+
+// sumSquares16 returns the sum of x*x over all samples as int64. Used
+// for RMS energy tracking during capture — caller keeps the running
+// total across chunks and divides by sample count at finalize time.
+// Worst case int16 squared ≈ 1.07e9; at 16 kHz we'd need ≈8.5e9
+// samples (~5.9 days) to overflow int64, so no saturation concern.
+func sumSquares16(samples []int16) int64 {
+	var s int64
+	for _, x := range samples {
+		v := int64(x)
+		s += v * v
+	}
+	return s
 }
 
 // runAccept is the socket accept loop. Each connection handles a single
@@ -361,6 +393,15 @@ func (d *Daemon) dispatch(ctx context.Context, req Request) Response {
 	case OpShutdown:
 		d.shutdownOnce.Do(func() { close(d.shutdown) })
 		return Response{}
+	case OpGetAudio:
+		seg, err := d.ring.Get(req.SegmentID)
+		if err != nil {
+			return Response{Error: err.Error()}
+		}
+		return Response{
+			AudioPCMBase64:  encodePCM16(seg.PCM),
+			AudioSampleRate: seg.SampleRate,
+		}
 	default:
 		return Response{Error: fmt.Sprintf("unknown op %q", req.Op)}
 	}
@@ -375,6 +416,7 @@ func (d *Daemon) listSegments() []SegmentInfo {
 			StartedAt:   s.StartedAt,
 			DurationMS:  int(s.Duration / time.Millisecond),
 			PeakLevel:   s.PeakLevel,
+			AvgLevel:    s.AvgLevel,
 			Transcribed: s.Transcript != "",
 			CachedText:  s.Transcript,
 		})

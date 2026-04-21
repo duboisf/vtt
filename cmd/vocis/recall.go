@@ -3,8 +3,11 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -86,6 +89,25 @@ var recallStopCmd = &cobra.Command{
 
 var recallDropIDs string
 
+var (
+	recallReplayIDs string
+	recallReplayGap time.Duration
+)
+
+var recallReplayCmd = &cobra.Command{
+	Use:   "replay",
+	Short: "Play back the raw audio of one or more segments",
+	Long: `Pipes each segment's raw 16 kHz mono PCM into paplay so you can hear
+what the daemon actually captured — useful for verifying whether a
+suspicious long segment is really silence/noise before deciding to
+drop it. Selection syntax matches pick (3, 3-5, 3-, -5, all).
+
+Requires paplay on PATH (part of pulseaudio-utils on most distros).`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runRecallReplay()
+	},
+}
+
 var recallDropCmd = &cobra.Command{
 	Use:   "drop",
 	Short: "Remove segments from the ring buffer (and persisted files)",
@@ -115,11 +137,18 @@ func init() {
 		"selection string (same syntax as pick --ids); required")
 	_ = recallDropCmd.MarkFlagRequired("ids")
 
+	recallReplayCmd.Flags().StringVar(&recallReplayIDs, "ids", "",
+		"selection string (same syntax as pick --ids); required")
+	recallReplayCmd.Flags().DurationVar(&recallReplayGap, "gap", 300*time.Millisecond,
+		"silence inserted between segments when playing multiple")
+	_ = recallReplayCmd.MarkFlagRequired("ids")
+
 	recallCmd.AddCommand(recallStartCmd)
 	recallCmd.AddCommand(recallPickCmd)
 	recallCmd.AddCommand(recallStatusCmd)
 	recallCmd.AddCommand(recallStopCmd)
 	recallCmd.AddCommand(recallDropCmd)
+	recallCmd.AddCommand(recallReplayCmd)
 	rootCmd.AddCommand(recallCmd)
 }
 
@@ -264,6 +293,108 @@ func runRecallStatus() error {
 	return nil
 }
 
+func runRecallReplay() error {
+	if _, err := exec.LookPath("paplay"); err != nil {
+		return fmt.Errorf("paplay not found on PATH (install pulseaudio-utils): %w", err)
+	}
+
+	cfg, _, err := config.Load()
+	if err != nil {
+		return err
+	}
+	socket, err := recall.ResolveSocketPath(cfg.Recall.SocketPath)
+	if err != nil {
+		return err
+	}
+	client := recall.NewClient(socket)
+
+	listCtx, listCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	segs, err := client.List(listCtx)
+	listCancel()
+	if err != nil {
+		return err
+	}
+	if len(segs) == 0 {
+		fmt.Fprintln(os.Stderr, "no segments to replay")
+		return nil
+	}
+	availableIDs := make([]int64, len(segs))
+	for i, s := range segs {
+		availableIDs[i] = s.ID
+	}
+	ids, err := recall.ParseSelection(recallReplayIDs, availableIDs)
+	if err != nil {
+		return err
+	}
+
+	// We fetch each segment's PCM from the daemon one at a time and
+	// stream it into a single paplay process. Streaming into a
+	// persistent paplay (instead of one-paplay-per-segment) keeps the
+	// audio device open and avoids per-segment startup clicks.
+	cmd := exec.Command("paplay",
+		"--raw",
+		"--rate=16000",
+		"--channels=1",
+		"--format=s16le",
+	)
+	cmd.Stderr = os.Stderr
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("paplay stdin: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start paplay: %w", err)
+	}
+
+	gapSamples := int(recallReplayGap.Seconds() * 16000)
+	gapBuf := make([]byte, gapSamples*2) // zeros = silence
+
+	for i, id := range ids {
+		fmt.Fprintf(os.Stderr, "playing segment #%d...\n", id)
+		fetchCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		pcm, sampleRate, err := client.GetAudio(fetchCtx, id)
+		cancel()
+		if err != nil {
+			stdin.Close()
+			_ = cmd.Wait()
+			return fmt.Errorf("segment %d: %w", id, err)
+		}
+		if sampleRate != 16000 {
+			stdin.Close()
+			_ = cmd.Wait()
+			return fmt.Errorf("segment %d sample_rate=%d, only 16 kHz supported by replay", id, sampleRate)
+		}
+		if err := writePCM16LE(stdin, pcm); err != nil {
+			stdin.Close()
+			_ = cmd.Wait()
+			return fmt.Errorf("pipe segment %d: %w", id, err)
+		}
+		if i < len(ids)-1 && gapSamples > 0 {
+			if _, err := stdin.Write(gapBuf); err != nil {
+				stdin.Close()
+				_ = cmd.Wait()
+				return fmt.Errorf("pipe gap: %w", err)
+			}
+		}
+	}
+
+	if err := stdin.Close(); err != nil {
+		return fmt.Errorf("close paplay stdin: %w", err)
+	}
+	return cmd.Wait()
+}
+
+// writePCM16LE writes int16 samples as little-endian bytes — matches
+// the `--format=s16le` paplay expects.
+func writePCM16LE(w io.Writer, pcm []int16) error {
+	buf := make([]byte, len(pcm)*2)
+	for i, s := range pcm {
+		binary.LittleEndian.PutUint16(buf[i*2:], uint16(s))
+	}
+	_, err := w.Write(buf)
+	return err
+}
+
 func runRecallDrop() error {
 	cfg, _, err := config.Load()
 	if err != nil {
@@ -325,19 +456,22 @@ func runRecallStop() error {
 
 // printSegmentTable renders a compact table of ring-buffer segments to
 // w. Stable columns so users can predict what they're picking from.
+// peak + rms let you spot noise-only segments at a glance: real speech
+// has rms well above ~0.01 even at quiet volumes, while silence with
+// a click-pop can have peak around 0.05 but rms under 0.003.
 func printSegmentTable(w *os.File, segs []recall.SegmentInfo) {
-	fmt.Fprintln(w, "  id    age        dur      peak   transcript")
-	fmt.Fprintln(w, "  ----  ---------  -------  -----  -------------------------------------------------")
+	fmt.Fprintln(w, "  id    age        dur      peak    rms     transcript")
+	fmt.Fprintln(w, "  ----  ---------  -------  ------  ------  ---------------------------------------")
 	now := time.Now()
 	for _, s := range segs {
 		age := now.Sub(s.StartedAt).Round(time.Second)
 		dur := time.Duration(s.DurationMS) * time.Millisecond
 		preview := "(not transcribed yet)"
 		if s.Transcribed {
-			preview = truncateOneLine(s.CachedText, 48)
+			preview = truncateOneLine(s.CachedText, 40)
 		}
-		fmt.Fprintf(w, "  %4d  %9s  %6.2fs  %4.2f   %s\n",
-			s.ID, age, dur.Seconds(), s.PeakLevel, preview)
+		fmt.Fprintf(w, "  %4d  %9s  %6.2fs  %6.3f  %6.3f  %s\n",
+			s.ID, age, dur.Seconds(), s.PeakLevel, s.AvgLevel, preview)
 	}
 }
 

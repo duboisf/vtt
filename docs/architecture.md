@@ -26,7 +26,7 @@ A future Wayland backend would add `internal/platform/wayland/` satisfying the s
 
 ## Top-level entry points
 
-- [`cmd/vocis/`](/home/fred/git/vtt/cmd/vocis/): Cobra-based CLI with one file per command group (`root.go`, `serve.go`, `config_cmd.go`, `doctor.go`, `key.go`, `recall.go`). `config_cmd.go` hosts the `config` parent plus `config init|backend|models` subcommands. `recall.go` hosts the `recall` parent plus `recall start|pick|status|stop|drop` subcommands for the always-on Wokis Recall daemon.
+- [`cmd/vocis/`](/home/fred/git/vtt/cmd/vocis/): Cobra-based CLI with one file per command group (`root.go`, `serve.go`, `config_cmd.go`, `doctor.go`, `key.go`, `recall.go`). `config_cmd.go` hosts the `config` parent plus `config init|backend|models` subcommands. `recall.go` hosts the `recall` parent plus `recall start|pick|status|stop|drop|replay` subcommands for the always-on Wokis Recall daemon.
 - [`README.md`](/home/fred/git/vtt/README.md): user-facing setup and usage
 - [`config.example.yaml`](/home/fred/git/vtt/config.example.yaml): config shape example
 
