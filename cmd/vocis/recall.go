@@ -84,6 +84,25 @@ var recallStopCmd = &cobra.Command{
 	},
 }
 
+var recallDropIDs string
+
+var recallDropCmd = &cobra.Command{
+	Use:   "drop",
+	Short: "Remove segments from the ring buffer (and persisted files)",
+	Long: `Removes the given segments from the daemon's ring buffer. When
+recall.persist.mode is "disk", the matching seg-<id>.json files are
+also deleted. Selection syntax matches the pick subcommand:
+
+    3       single id
+    3-5     closed range
+    3-      id 3 and newer
+    -5      everything up to 5
+    all, *  every segment in the buffer`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runRecallDrop()
+	},
+}
+
 func init() {
 	recallPickCmd.Flags().StringVar(&recallPickSelection, "ids", "",
 		"selection string (e.g. \"3\", \"3-5\", \"3-\", \"-5\", \"all\", or a comma-separated mix) — skips the interactive prompt")
@@ -92,10 +111,15 @@ func init() {
 	recallPickCmd.Flags().StringVar(&recallPickJoin, "join", " ",
 		"separator inserted between segment transcripts when selecting multiple")
 
+	recallDropCmd.Flags().StringVar(&recallDropIDs, "ids", "",
+		"selection string (same syntax as pick --ids); required")
+	_ = recallDropCmd.MarkFlagRequired("ids")
+
 	recallCmd.AddCommand(recallStartCmd)
 	recallCmd.AddCommand(recallPickCmd)
 	recallCmd.AddCommand(recallStatusCmd)
 	recallCmd.AddCommand(recallStopCmd)
+	recallCmd.AddCommand(recallDropCmd)
 	rootCmd.AddCommand(recallCmd)
 }
 
@@ -181,6 +205,7 @@ func runRecallPick() error {
 	}
 
 	parts := make([]string, 0, len(ids))
+	empties := 0
 	for _, id := range ids {
 		fmt.Fprintf(os.Stderr, "transcribing segment #%d...\n", id)
 		txCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -189,7 +214,20 @@ func runRecallPick() error {
 		if err != nil {
 			return fmt.Errorf("segment %d: %w", id, err)
 		}
-		parts = append(parts, strings.TrimSpace(text))
+		trimmed := strings.TrimSpace(text)
+		if trimmed == "" {
+			empties++
+			fmt.Fprintf(os.Stderr, "  segment #%d: (empty — likely silence or noise)\n", id)
+			continue
+		}
+		parts = append(parts, trimmed)
+	}
+	if len(parts) == 0 {
+		fmt.Fprintf(os.Stderr, "all %d segment(s) transcribed empty — nothing to print\n", empties)
+		return nil
+	}
+	if empties > 0 {
+		fmt.Fprintf(os.Stderr, "note: %d of %d segment(s) were empty and skipped\n", empties, len(ids))
 	}
 	fmt.Println(strings.Join(parts, recallPickJoin))
 	return nil
@@ -223,6 +261,45 @@ func runRecallStatus() error {
 		fmt.Printf("newest:    %s ago\n", time.Duration(stats.NewestAgeMS)*time.Millisecond)
 		fmt.Printf("frames:    %d\n", stats.TotalFrames)
 	}
+	return nil
+}
+
+func runRecallDrop() error {
+	cfg, _, err := config.Load()
+	if err != nil {
+		return err
+	}
+	socket, err := recall.ResolveSocketPath(cfg.Recall.SocketPath)
+	if err != nil {
+		return err
+	}
+	client := recall.NewClient(socket)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	segs, err := client.List(ctx)
+	if err != nil {
+		return err
+	}
+	if len(segs) == 0 {
+		fmt.Fprintln(os.Stderr, "no segments to drop")
+		return nil
+	}
+	availableIDs := make([]int64, len(segs))
+	for i, s := range segs {
+		availableIDs[i] = s.ID
+	}
+	ids, err := recall.ParseSelection(recallDropIDs, availableIDs)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if err := client.Drop(ctx, id); err != nil {
+			return fmt.Errorf("drop segment %d: %w", id, err)
+		}
+	}
+	fmt.Fprintf(os.Stderr, "dropped %d segment(s)\n", len(ids))
 	return nil
 }
 

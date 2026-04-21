@@ -254,35 +254,47 @@ func (d *Daemon) runCapture(ctx context.Context) error {
 	}
 }
 
-// finalizeActive stamps the final duration/peak onto the segment and
-// adds it to the ring buffer. Emits a `vocis.recall.capture` trace
-// span (a fresh root span, not attached to the daemon context) so
-// each captured utterance shows up as its own trace in Jaeger.
-// forceFlushed is true when MaxSegmentSeconds cut the segment short
-// rather than a natural VAD-stopped event.
+// finalizeActive stamps the final duration/peak onto the segment and,
+// if it looks like real speech, adds it to the ring buffer. Emits a
+// `vocis.recall.capture` trace span (a fresh root span, not attached to
+// the daemon context) so each captured utterance shows up as its own
+// trace in Jaeger. forceFlushed is true when MaxSegmentSeconds cut the
+// segment short rather than a natural VAD-stopped event.
+//
+// Segments whose peak level is below recall.min_segment_peak are
+// treated as silence/noise and dropped — Silero can get stuck
+// declaring in-speech on low-level ambient noise, which without this
+// filter fills the ring with 30 s force-flushed segments that Whisper
+// transcribes to the empty string.
 func (d *Daemon) finalizeActive(seg *Segment, peak int16, sampleRate int, forceFlushed bool) {
 	seg.Duration = time.Duration(len(seg.PCM)) * time.Second / time.Duration(sampleRate)
 	seg.PeakLevel = float64(peak) / 32768.0
 
-	id := d.ring.Add(seg)
+	dropped := seg.PeakLevel < d.cfg.Recall.MinSegmentPeak
 
-	// Span covers only the finalize/add work — the capture itself is
-	// driven by the recorder's real-time stream, so its duration is
-	// simply the segment duration. We set endTime explicitly via a
-	// manually-started span anchored at seg.StartedAt so the trace
-	// reflects when the utterance actually began.
-	ctx, span := telemetry.StartSpan(context.Background(), "vocis.recall.capture",
+	var id int64
+	if !dropped {
+		id = d.ring.Add(seg)
+	}
+
+	_, span := telemetry.StartSpan(context.Background(), "vocis.recall.capture",
 		attribute.Int64("segment.id", id),
 		attribute.Int("segment.duration_ms", int(seg.Duration/time.Millisecond)),
 		attribute.Int("segment.sample_count", len(seg.PCM)),
 		attribute.Int("segment.sample_rate", sampleRate),
 		attribute.Float64("segment.peak_level", seg.PeakLevel),
+		attribute.Float64("segment.min_peak_threshold", d.cfg.Recall.MinSegmentPeak),
 		attribute.Bool("segment.force_flushed", forceFlushed),
+		attribute.Bool("segment.dropped_as_silence", dropped),
 	)
-	_ = ctx
 	telemetry.EndSpan(span, nil)
 
-	sessionlog.Infof("recall: captured segment #%d (%.2fs, peak=%.2f, force_flushed=%t)",
+	if dropped {
+		sessionlog.Infof("recall: dropped silence segment (%.2fs, peak=%.4f < min=%.4f, force_flushed=%t)",
+			seg.Duration.Seconds(), seg.PeakLevel, d.cfg.Recall.MinSegmentPeak, forceFlushed)
+		return
+	}
+	sessionlog.Infof("recall: captured segment #%d (%.2fs, peak=%.4f, force_flushed=%t)",
 		id, seg.Duration.Seconds(), seg.PeakLevel, forceFlushed)
 }
 

@@ -114,6 +114,16 @@ type RecallConfig struct {
 	// monologue without a pause gets flushed at this boundary so the
 	// ring buffer can't grow unbounded from a single stream.
 	MaxSegmentSeconds int `yaml:"max_segment_seconds"`
+	// MinSegmentPeak is the minimum peak sample level (0-1, abs-max /
+	// 32768) a finalized segment must have to be kept in the ring
+	// buffer. Below this, the segment is treated as silence or noise
+	// and dropped. Silero VAD can get stuck declaring in-speech on
+	// low-level ambient noise (fans, keyboards) that briefly crosses
+	// its probability threshold; without this filter those sessions
+	// fill the ring with 30 s force-flushed noise segments. A value
+	// around 0.02 rejects fan/room tone while keeping quiet speech.
+	// Set to 0 to keep every segment (useful only for debugging).
+	MinSegmentPeak float64 `yaml:"min_segment_peak"`
 	// Persist controls whether captured segments are mirrored to disk.
 	// Default is memory-only — always-on mic audio does not land on
 	// disk unless the user explicitly opts in by setting mode=disk.
@@ -392,6 +402,7 @@ func Default() Config {
 			MinUtteranceMS:    500,
 			PrerollMS:         300,
 			MaxSegmentSeconds: 30,
+			MinSegmentPeak:    0.02,
 			Persist: RecallPersistConfig{
 				Mode: RecallPersistMemory,
 				Dir:  defaultRecallStateDir(),
@@ -621,6 +632,9 @@ func (c Config) Validate() error {
 	}
 	if c.Recall.MaxSegmentSeconds < 1 || c.Recall.MaxSegmentSeconds > 300 {
 		return errors.New("recall.max_segment_seconds must be between 1 and 300")
+	}
+	if c.Recall.MinSegmentPeak < 0 || c.Recall.MinSegmentPeak > 1 {
+		return errors.New("recall.min_segment_peak must be between 0 and 1")
 	}
 	switch c.Recall.Persist.Mode {
 	case "", RecallPersistMemory, RecallPersistDisk:

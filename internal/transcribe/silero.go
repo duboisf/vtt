@@ -91,11 +91,33 @@ func initSilero(libraryPath string) error {
 			sileroInitErr = errors.New("silero: embedded model bytes are empty")
 			return
 		}
+		// Pin Silero to a single CPU thread. The model is tiny (~2 MB)
+		// and a 576-sample inference completes in well under a
+		// millisecond single-threaded. ONNX Runtime's default behavior
+		// is to use one thread per physical core for both intra- and
+		// inter-op parallelism, which on a multi-core box means every
+		// 32 ms window pings N cores to do microseconds of work — the
+		// coordination overhead shows up as multiple cores pegged near
+		// 100 % on an otherwise idle recall daemon.
+		opts, err := ort.NewSessionOptions()
+		if err != nil {
+			sileroInitErr = fmt.Errorf("silero session options: %w", err)
+			return
+		}
+		defer opts.Destroy()
+		if err := opts.SetIntraOpNumThreads(1); err != nil {
+			sileroInitErr = fmt.Errorf("silero: SetIntraOpNumThreads(1): %w", err)
+			return
+		}
+		if err := opts.SetInterOpNumThreads(1); err != nil {
+			sileroInitErr = fmt.Errorf("silero: SetInterOpNumThreads(1): %w", err)
+			return
+		}
 		sess, err := ort.NewDynamicAdvancedSessionWithONNXData(
 			sileroModelBytes,
 			sileroInputNames,
 			sileroOutputNames,
-			nil,
+			opts,
 		)
 		if err != nil {
 			sileroInitErr = fmt.Errorf("silero session: %w", err)
