@@ -9,6 +9,7 @@ import (
 	"time"
 
 	openaisdk "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
 
 	"vocis/internal/config"
 )
@@ -73,10 +74,12 @@ func makeChunk(content string) openaisdk.ChatCompletionChunk {
 
 // fakeStreamer implements chatCompletionStreamer for testing.
 type fakeStreamer struct {
-	stream chatStream
+	stream   chatStream
+	lastBody openaisdk.ChatCompletionNewParams
 }
 
-func (f *fakeStreamer) NewStreaming(_ context.Context, _ openaisdk.ChatCompletionNewParams) chatStream {
+func (f *fakeStreamer) NewStreaming(_ context.Context, body openaisdk.ChatCompletionNewParams, _ ...option.RequestOption) chatStream {
+	f.lastBody = body
 	return f.stream
 }
 
@@ -267,6 +270,42 @@ func TestPostProcessCallsOnFirstToken(t *testing.T) {
 	}
 	if result.Text != "Hello world" {
 		t.Fatalf("text = %q, want %q", result.Text, "Hello world")
+	}
+}
+
+func TestPostProcessAppliesSamplingParams(t *testing.T) {
+	t.Parallel()
+
+	temp, topP, freq, pres := 0.25, 0.9, 0.4, 0.1
+	cfg := enabledCfg()
+	cfg.Temperature = &temp
+	cfg.TopP = &topP
+	cfg.FrequencyPenalty = &freq
+	cfg.PresencePenalty = &pres
+	cfg.Stop = []string{"\nInput:", "Here's"}
+
+	streamer := &fakeStreamer{stream: &fakeChatStream{
+		ctx:    context.Background(),
+		chunks: []openaisdk.ChatCompletionChunk{makeChunk("ok")},
+	}}
+	client := newTestClient(streamer)
+	client.PostProcess(context.Background(), cfg, "some input text", nil)
+
+	got := streamer.lastBody
+	if got.Temperature.Value != temp {
+		t.Errorf("temperature = %v, want %v", got.Temperature.Value, temp)
+	}
+	if got.TopP.Value != topP {
+		t.Errorf("top_p = %v, want %v", got.TopP.Value, topP)
+	}
+	if got.FrequencyPenalty.Value != freq {
+		t.Errorf("frequency_penalty = %v, want %v", got.FrequencyPenalty.Value, freq)
+	}
+	if got.PresencePenalty.Value != pres {
+		t.Errorf("presence_penalty = %v, want %v", got.PresencePenalty.Value, pres)
+	}
+	if len(got.Stop.OfStringArray) != 2 || got.Stop.OfStringArray[0] != "\nInput:" {
+		t.Errorf("stop = %v, want [\\nInput: Here's]", got.Stop.OfStringArray)
 	}
 }
 

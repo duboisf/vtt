@@ -255,6 +255,19 @@ can take 2–5 s extra. Symptoms:
 Pre-warming: send an empty/short chat request at vocis startup to get
 the target model resident before the user's first dictation.
 
+### Sampling knobs
+
+The `postprocess.*` config exposes the sampling params vocis forwards
+to `/chat/completions`. OpenAI-standard (`temperature`, `top_p`,
+`frequency_penalty`, `presence_penalty`, `stop`) ride on the request
+body directly. Non-standard (`min_p`, `repetition_penalty`) are sent
+as extra JSON fields — Lemonade's OGA backend honors them; the OpenAI
+Cloud API silently ignores them.
+
+`seed` is intentionally not exposed: Lemonade accepts the field but
+does not thread it to the sampler, so same-seed calls at temp>0 still
+produce different outputs. Treat Lemonade chat as non-reproducible.
+
 ## The lemonade-probe script
 
 [`scripts/lemonade-probe`](../scripts/lemonade-probe/main.go) is a

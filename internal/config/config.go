@@ -76,6 +76,20 @@ type PostProcessConfig struct {
 	MinWordCount         int    `yaml:"min_word_count"`
 	FirstTokenTimeoutSec int    `yaml:"first_token_timeout_seconds"`
 	TotalTimeoutSec      int    `yaml:"total_timeout_seconds"`
+	// Sampling knobs. Pointers so nil = "leave unset; use backend
+	// default". Zero is a meaningful value (e.g. temperature=0 is
+	// greedy decoding). OpenAI-standard: Temperature, TopP,
+	// FrequencyPenalty, PresencePenalty, Stop. Non-standard but accepted
+	// by Lemonade/llama.cpp backends: MinP, RepetitionPenalty — these
+	// are sent as extra JSON fields on the request body and ignored by
+	// the OpenAI Cloud API.
+	Temperature       *float64 `yaml:"temperature,omitempty"`
+	TopP              *float64 `yaml:"top_p,omitempty"`
+	MinP              *float64 `yaml:"min_p,omitempty"`
+	FrequencyPenalty  *float64 `yaml:"frequency_penalty,omitempty"`
+	PresencePenalty   *float64 `yaml:"presence_penalty,omitempty"`
+	RepetitionPenalty *float64 `yaml:"repetition_penalty,omitempty"`
+	Stop              []string `yaml:"stop,omitempty"`
 }
 
 type TelemetryConfig struct {
@@ -398,6 +412,7 @@ func Default() Config {
 			MinWordCount:         10,
 			FirstTokenTimeoutSec: 10,
 			TotalTimeoutSec:      15,
+			Temperature:          floatPtr(0.2),
 		},
 		Telemetry: TelemetryConfig{
 			Enabled:  false,
@@ -422,6 +437,8 @@ func Default() Config {
 		YAMLIndent: 2,
 	}
 }
+
+func floatPtr(v float64) *float64 { return &v }
 
 // defaultRecallStateDir returns the default for `recall.persist.dir`.
 // Follows the XDG state-dir convention: $XDG_STATE_HOME/vocis/recall
@@ -659,8 +676,34 @@ func (c Config) Validate() error {
 		return errors.New("recall.persist.mode=disk requires recall.persist.dir to be set")
 	}
 
+	if err := c.PostProcess.validate(); err != nil {
+		return err
+	}
+
 	c.validateOverlayTemplates()
 
+	return nil
+}
+
+func (p PostProcessConfig) validate() error {
+	if p.Temperature != nil && (*p.Temperature < 0 || *p.Temperature > 2) {
+		return errors.New("postprocess.temperature must be between 0 and 2")
+	}
+	if p.TopP != nil && (*p.TopP <= 0 || *p.TopP > 1) {
+		return errors.New("postprocess.top_p must be between 0 (exclusive) and 1")
+	}
+	if p.MinP != nil && (*p.MinP < 0 || *p.MinP > 1) {
+		return errors.New("postprocess.min_p must be between 0 and 1")
+	}
+	if p.FrequencyPenalty != nil && (*p.FrequencyPenalty < -2 || *p.FrequencyPenalty > 2) {
+		return errors.New("postprocess.frequency_penalty must be between -2 and 2")
+	}
+	if p.PresencePenalty != nil && (*p.PresencePenalty < -2 || *p.PresencePenalty > 2) {
+		return errors.New("postprocess.presence_penalty must be between -2 and 2")
+	}
+	if p.RepetitionPenalty != nil && (*p.RepetitionPenalty <= 0 || *p.RepetitionPenalty > 2) {
+		return errors.New("postprocess.repetition_penalty must be between 0 (exclusive) and 2")
+	}
 	return nil
 }
 

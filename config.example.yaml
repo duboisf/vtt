@@ -161,6 +161,20 @@ postprocess:
 
     Now clean the next input:
   min_word_count: 10
+  # Sampling knobs. Omit any field to let the backend use its default.
+  # OpenAI-standard (honored on all backends): temperature, top_p,
+  # frequency_penalty, presence_penalty, stop.
+  # Non-standard (honored by Lemonade / llama.cpp, ignored by OpenAI
+  # Cloud): min_p, repetition_penalty. Note: `seed` is NOT supported —
+  # Lemonade's onnxruntime-genai backend accepts the field but does not
+  # thread it to the sampler.
+  temperature: 0.2
+  # top_p: 0.9
+  # min_p: 0.05
+  # frequency_penalty: 0.4
+  # presence_penalty: 0.0
+  # repetition_penalty: 1.1
+  # stop: ["\nInput:", "Here is", "Here's", "Sure,", "I understand", "Output:"]
 
 telemetry:
   enabled: false

@@ -6,6 +6,8 @@ import (
 	"time"
 
 	openaisdk "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/packages/param"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
@@ -22,7 +24,7 @@ type chatStream interface {
 
 // chatCompletionStreamer creates streaming chat completions.
 type chatCompletionStreamer interface {
-	NewStreaming(ctx context.Context, body openaisdk.ChatCompletionNewParams) chatStream
+	NewStreaming(ctx context.Context, body openaisdk.ChatCompletionNewParams, opts ...option.RequestOption) chatStream
 }
 
 // sdkChatStreamer adapts the real OpenAI SDK to the chatCompletionStreamer interface.
@@ -30,8 +32,8 @@ type sdkChatStreamer struct {
 	completions *openaisdk.ChatCompletionService
 }
 
-func (s *sdkChatStreamer) NewStreaming(ctx context.Context, body openaisdk.ChatCompletionNewParams) chatStream {
-	return s.completions.NewStreaming(ctx, body)
+func (s *sdkChatStreamer) NewStreaming(ctx context.Context, body openaisdk.ChatCompletionNewParams, opts ...option.RequestOption) chatStream {
+	return s.completions.NewStreaming(ctx, body, opts...)
 }
 
 // PostProcessResult holds the cleaned text and whether cleanup was skipped.
@@ -68,6 +70,38 @@ func (c *Client) WarmPostProcess(ctx context.Context, model string) {
 		return
 	}
 	sessionlog.Debugf("postprocess warm %s ok", model)
+}
+
+// applySamplingParams populates body with OpenAI-standard sampling
+// knobs from cfg, and returns request options that inject the
+// non-standard knobs (min_p, repetition_penalty) as extra JSON fields.
+// Non-standard fields are ignored by the OpenAI Cloud API but honored
+// by Lemonade / llama.cpp backends.
+func applySamplingParams(body *openaisdk.ChatCompletionNewParams, cfg config.PostProcessConfig) []option.RequestOption {
+	if cfg.Temperature != nil {
+		body.Temperature = param.NewOpt(*cfg.Temperature)
+	}
+	if cfg.TopP != nil {
+		body.TopP = param.NewOpt(*cfg.TopP)
+	}
+	if cfg.FrequencyPenalty != nil {
+		body.FrequencyPenalty = param.NewOpt(*cfg.FrequencyPenalty)
+	}
+	if cfg.PresencePenalty != nil {
+		body.PresencePenalty = param.NewOpt(*cfg.PresencePenalty)
+	}
+	if len(cfg.Stop) > 0 {
+		body.Stop = openaisdk.ChatCompletionNewParamsStopUnion{OfStringArray: cfg.Stop}
+	}
+
+	var opts []option.RequestOption
+	if cfg.MinP != nil {
+		opts = append(opts, option.WithJSONSet("min_p", *cfg.MinP))
+	}
+	if cfg.RepetitionPenalty != nil {
+		opts = append(opts, option.WithJSONSet("repetition_penalty", *cfg.RepetitionPenalty))
+	}
+	return opts
 }
 
 type streamResult struct {
@@ -122,13 +156,15 @@ func (c *Client) PostProcess(ctx context.Context, cfg config.PostProcessConfig, 
 	span.AddEvent("postprocess.streaming_request_sent")
 
 	go func() {
-		stream := c.chatStreamer.NewStreaming(ctx, openaisdk.ChatCompletionNewParams{
+		body := openaisdk.ChatCompletionNewParams{
 			Model: openaisdk.ChatModel(cfg.Model),
 			Messages: []openaisdk.ChatCompletionMessageParamUnion{
 				openaisdk.SystemMessage(prompt),
 				openaisdk.UserMessage(text),
 			},
-		})
+		}
+		opts := applySamplingParams(&body, cfg)
+		stream := c.chatStreamer.NewStreaming(ctx, body, opts...)
 
 		var result strings.Builder
 		gotFirst := false
