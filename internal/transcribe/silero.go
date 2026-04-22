@@ -151,10 +151,14 @@ func initSilero(libraryPath string) error {
 // to the RMS VAD).
 func resolveOnnxruntimeLibrary(configured string) (string, error) {
 	if configured != "" {
-		if _, err := os.Stat(configured); err != nil {
-			return "", fmt.Errorf("onnxruntime library %q: %w", configured, err)
+		// Expand $HOME / $XDG_* so users can keep the yaml portable
+		// across machines. Matches the auto-discovery list below which
+		// already runs every candidate through os.ExpandEnv.
+		expanded := os.ExpandEnv(configured)
+		if _, err := os.Stat(expanded); err != nil {
+			return "", fmt.Errorf("onnxruntime library %q: %w", expanded, err)
 		}
-		return configured, nil
+		return expanded, nil
 	}
 	candidates := []string{
 		"/usr/local/lib/libonnxruntime.so",

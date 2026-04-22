@@ -3,8 +3,40 @@ package transcribe
 import (
 	"math"
 	"os"
+	"path/filepath"
 	"testing"
 )
+
+// TestResolveOnnxruntimeLibraryExpandsEnvVars pins the behavior that a
+// configured `streaming.onnxruntime_library` path is run through
+// os.ExpandEnv before os.Stat, so users can keep literal $HOME /
+// $XDG_* forms in their yaml and have them work across machines. The
+// auto-discovery list already expands env vars; the configured path
+// should be consistent.
+func TestResolveOnnxruntimeLibraryExpandsEnvVars(t *testing.T) {
+	dir := t.TempDir()
+	libPath := filepath.Join(dir, "libonnxruntime.so")
+	if err := os.WriteFile(libPath, []byte("not a real library"), 0o600); err != nil {
+		t.Fatalf("write stub: %v", err)
+	}
+
+	t.Setenv("VOCIS_TEST_ONNX_DIR", dir)
+
+	resolved, err := resolveOnnxruntimeLibrary("$VOCIS_TEST_ONNX_DIR/libonnxruntime.so")
+	if err != nil {
+		t.Fatalf("resolveOnnxruntimeLibrary with $VAR: %v", err)
+	}
+	if resolved != libPath {
+		t.Fatalf("resolved = %q, want %q", resolved, libPath)
+	}
+}
+
+func TestResolveOnnxruntimeLibraryRejectsMissingConfiguredPath(t *testing.T) {
+	_, err := resolveOnnxruntimeLibrary("/nonexistent/libonnxruntime.so")
+	if err == nil {
+		t.Fatal("expected error for missing configured path, got nil")
+	}
+}
 
 // speechChunk returns `ms` of a 200Hz sine at the given amplitude
 // (0-1), as 16 kHz PCM16. Useful for handing Silero synthetic input
