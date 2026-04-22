@@ -282,6 +282,12 @@ type OverlayListen struct {
 	Connecting   string `yaml:"connecting"`
 	Reconnecting string `yaml:"reconnecting"`
 	Connected    string `yaml:"connected"`
+	// LoadingModel is the subtitle shown while vocis is forcing a
+	// local transcription model into memory at session-start. Supports
+	// {model} template expansion with the configured transcribe model
+	// name. Only applies on the Lemonade backend — cloud backends
+	// always have the model warm.
+	LoadingModel string `yaml:"loading_model"`
 }
 
 type OverlayFinish struct {
@@ -380,6 +386,7 @@ func Default() Config {
 				Connecting:   "○ Connecting...",
 				Reconnecting: "○ Reconnecting... (attempt {attempt}/{max})",
 				Connected:    "● Ready to type into {window}",
+				LoadingModel: "○ Loading {model}...",
 			},
 			Finishing: OverlayFinish{
 				Title:          "Finishing",
@@ -419,8 +426,14 @@ func Default() Config {
 			Endpoint: "localhost:4317",
 		},
 		Recall: RecallConfig{
-			RetentionSeconds:  600,
-			MaxSegments:       200,
+			// 7 days of retention is a sensible "long history" default for
+			// an always-on recall. Segments are small (~100-400 KB each);
+			// 7 days at typical speaking pace stays well under 1 GB even
+			// with persist.mode=disk. Set to 0 for unbounded time.
+			RetentionSeconds:  604800,
+			// 2000 keeps disk under ~800 MB worst-case. Set to 0 for
+			// unbounded count (only the time bound applies).
+			MaxSegments:       2000,
 			SocketPath:        "",
 			MinSilenceMS:      500,
 			MinSpeechMS:       150,
@@ -637,8 +650,12 @@ func (c Config) Validate() error {
 		return errors.New("overlay dimensions are too small")
 	}
 
-	if c.Recall.RetentionSeconds < 0 || c.Recall.RetentionSeconds > 86400 {
-		return errors.New("recall.retention_seconds must be between 0 and 86400")
+	// 30-day ceiling on retention: keeps the validation bound sane
+	// while leaving headroom for "long history" setups. At typical
+	// conversational pace persisted to disk, 30 days easily exceeds
+	// the max_segments ceiling below — the count bound kicks in first.
+	if c.Recall.RetentionSeconds < 0 || c.Recall.RetentionSeconds > 30*86400 {
+		return errors.New("recall.retention_seconds must be between 0 and 2592000 (30 days)")
 	}
 	if c.Recall.MaxSegments < 0 || c.Recall.MaxSegments > 10000 {
 		return errors.New("recall.max_segments must be between 0 and 10000")

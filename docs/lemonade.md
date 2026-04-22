@@ -255,6 +255,48 @@ can take 2–5 s extra. Symptoms:
 Pre-warming: send an empty/short chat request at vocis startup to get
 the target model resident before the user's first dictation.
 
+## Session-start preflight
+
+The audio slot has the same `max_models.audio: 1` constraint, so
+`whisper-v3-turbo-FLM` can be downloaded but not resident — e.g. when
+something else (a different audio model like `gemma4-it-e2b-FLM` with
+the `transcription` label) stole the slot. Without a check, the WS
+realtime path lazy-loads the model while audio is already streaming,
+which shows up as "no transcript ever arrives" and a context timeout.
+
+vocis runs a two-layer defense:
+
+1. **Startup warm (fire-and-forget).**
+   [`transcribe.EnsureLemonadeModelsLoaded`](../internal/transcribe/warm_transcription.go)
+   runs once when `vocis start` boots. It calls `/health`, and if the
+   configured transcribe or PP model isn't resident, POSTs a 100 ms
+   silent WAV to `/audio/transcriptions` (or an empty chat request for
+   the PP model) to force a load in the background.
+2. **Transcribe-time preflight (blocking).**
+   [`transcribe.EnsureTranscribeModelLoaded`](../internal/transcribe/warm_transcription.go)
+   runs every time the user starts a dictation session (inside
+   `startRecordingLocked`). It re-checks `/health`; if the transcribe
+   model isn't resident, it fires the warm POST inline before the
+   recorder starts. While the warm is running, the overlay subtitle
+   switches to `overlay.listening.loading_model` (default
+   `"○ Loading {model}..."`) so the user knows why the session hasn't
+   started yet. Typical warm path: ~1 ms (health check only).
+   Cold-load path: ~5–10 s (warm POST blocking on NPU load).
+
+The transcribe-time preflight covers the cases the startup warm can't:
+
+- vocis was launched before Lemonade (or while Lemonade was still
+  booting) and the startup warm failed silently.
+- Another client loaded a different audio model after vocis started
+  and evicted whisper from the slot.
+- The user changed `transcription.model` in their config between
+  sessions (vocis reloads config on every session start).
+
+Errors from the preflight (Lemonade unreachable, warm POST returned
+5xx, ctx cancelled) surface as a session-start error overlay. Running
+`vocis` against the OpenAI backend skips the preflight entirely — it's
+a no-op for non-Lemonade backends.
+
 ### Sampling knobs
 
 The `postprocess.*` config exposes the sampling params vocis forwards

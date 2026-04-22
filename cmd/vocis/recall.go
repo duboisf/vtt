@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -26,6 +27,7 @@ var (
 	recallPickSelection   string
 	recallPickPostprocess bool
 	recallPickJoin        string
+	recallPickFZF         bool
 )
 
 var recallCmd = &cobra.Command{
@@ -132,6 +134,8 @@ func init() {
 		"run the configured LLM cleanup on each transcript before joining")
 	recallPickCmd.Flags().StringVar(&recallPickJoin, "join", " ",
 		"separator inserted between segment transcripts when selecting multiple")
+	recallPickCmd.Flags().BoolVar(&recallPickFZF, "fzf", false,
+		"use fzf as the picker UI with a preview pane showing the full cached transcript (tab to multi-select, enter to confirm); requires fzf on PATH")
 
 	recallDropCmd.Flags().StringVar(&recallDropIDs, "ids", "",
 		"selection string (same syntax as pick --ids); required")
@@ -224,6 +228,15 @@ func runRecallPick() error {
 		ids, err = recall.ParseSelection(sel, availableIDs)
 		if err != nil {
 			return err
+		}
+	} else if recallPickFZF {
+		ids, err = pickSegmentsWithFZF(segs)
+		if err != nil {
+			return err
+		}
+		if len(ids) == 0 {
+			fmt.Fprintln(os.Stderr, "no selection")
+			return nil
 		}
 	} else {
 		printSegmentTable(os.Stderr, segs)
@@ -468,7 +481,7 @@ func printSegmentTable(w *os.File, segs []recall.SegmentInfo) {
 		dur := time.Duration(s.DurationMS) * time.Millisecond
 		preview := "(not transcribed yet)"
 		if s.Transcribed {
-			preview = truncateOneLine(s.CachedText, 40)
+			preview = truncateOneLine(s.CachedText, 80)
 		}
 		fmt.Fprintf(w, "  %4d  %9s  %6.2fs  %6.3f  %6.3f  %s\n",
 			s.ID, age, dur.Seconds(), s.PeakLevel, s.AvgLevel, preview)
@@ -481,6 +494,89 @@ func truncateOneLine(s string, max int) string {
 		return s
 	}
 	return s[:max-1] + "…"
+}
+
+// pickSegmentsWithFZF runs fzf as the selection UI. Each segment is
+// piped in as a tab-separated "ID<TAB>HEADER" line; fzf's preview pane
+// cats a per-segment file holding the full cached transcript (or a
+// placeholder for segments that haven't been transcribed yet). Returns
+// the selected IDs in the order the user marked them. Multi-select is
+// on (tab marks); plain enter confirms the current line.
+func pickSegmentsWithFZF(segs []recall.SegmentInfo) ([]int64, error) {
+	fzfPath, err := exec.LookPath("fzf")
+	if err != nil {
+		return nil, fmt.Errorf("--fzf requires fzf on PATH: %w", err)
+	}
+
+	// Temp dir for preview files. Cleaned up after fzf exits regardless
+	// of outcome — we don't want to leave transcripts lying around.
+	previewDir, err := os.MkdirTemp("", "vocis-recall-preview-*")
+	if err != nil {
+		return nil, fmt.Errorf("create preview dir: %w", err)
+	}
+	defer os.RemoveAll(previewDir)
+
+	now := time.Now()
+	var input strings.Builder
+	for _, s := range segs {
+		age := now.Sub(s.StartedAt).Round(time.Second)
+		dur := time.Duration(s.DurationMS) * time.Millisecond
+		short := "(not transcribed yet)"
+		if s.Transcribed {
+			short = truncateOneLine(s.CachedText, 80)
+		}
+		// Tab-separated so fzf can treat field 1 as the ID for --preview.
+		fmt.Fprintf(&input, "%d\t#%d  %s ago  %.2fs  %s\n",
+			s.ID, s.ID, age, dur.Seconds(), short)
+
+		body := "(not transcribed yet — select this row + enter to transcribe)"
+		if s.Transcribed {
+			body = s.CachedText
+		}
+		header := fmt.Sprintf("segment #%d\nstarted: %s (%s ago)\nduration: %s\npeak: %.3f  rms: %.3f\n\n",
+			s.ID, s.StartedAt.Format(time.RFC3339), age, dur, s.PeakLevel, s.AvgLevel)
+		path := filepath.Join(previewDir, fmt.Sprintf("%d.txt", s.ID))
+		if err := os.WriteFile(path, []byte(header+body), 0o600); err != nil {
+			return nil, fmt.Errorf("write preview for segment %d: %w", s.ID, err)
+		}
+	}
+
+	cmd := exec.Command(fzfPath,
+		"--multi",
+		"--no-sort",
+		"--tac", // show newest segment first (we feed oldest-first)
+		"--delimiter=\t",
+		"--with-nth=2..",
+		"--preview", fmt.Sprintf("cat %s/{1}.txt", previewDir),
+		"--preview-window=right,60%,wrap",
+		"--prompt=recall> ",
+		"--header=tab to mark, enter to confirm, esc to abort",
+	)
+	cmd.Stdin = strings.NewReader(input.String())
+	cmd.Stderr = os.Stderr
+	out, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 130 {
+			// fzf convention: 130 = user cancelled (Ctrl-C / Esc). Treat
+			// as empty selection rather than an error.
+			return nil, nil
+		}
+		return nil, fmt.Errorf("fzf: %w", err)
+	}
+
+	var ids []int64
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		idStr, _, _ := strings.Cut(line, "\t")
+		var id int64
+		if _, err := fmt.Sscanf(idStr, "%d", &id); err != nil {
+			return nil, fmt.Errorf("parse fzf output %q: %w", line, err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 // promptSegmentSelection reads a selection string from stdin and turns

@@ -177,6 +177,23 @@ func (o *Overlay) SetConnecting(attempt, max int) {
 	o.drawLocked()
 }
 
+// SetLoadingModel updates the Listening-view subtitle to indicate the
+// transcription model is being force-loaded on the backend. Intended
+// for the session-start preflight on Lemonade; no-op if the overlay
+// isn't currently in the Listening state.
+func (o *Overlay) SetLoadingModel(modelName string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	if !o.visible || o.state.title != o.cfg.Listening.Title {
+		return
+	}
+	o.state.subtitle = config.ExpandTemplate(o.cfg.Listening.LoadingModel, map[string]string{
+		"model": modelName,
+	})
+	o.drawLocked()
+}
+
 func (o *Overlay) SetSubmitMode(enabled bool) {
 	o.mu.Lock()
 	defer o.mu.Unlock()

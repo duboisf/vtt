@@ -115,6 +115,10 @@ overlay:
     connecting: "○ Connecting..."
     reconnecting: "○ Reconnecting... (attempt {attempt}/{max})"
     connected: "● Ready to type into {window}"
+    # Shown while vocis is force-loading the configured transcription
+    # model on the Lemonade backend (session-start preflight). Not
+    # used on the OpenAI backend.
+    loading_model: "○ Loading {model}..."
   finishing:
     title: Finishing
     cancel_hint: "— press {shortcut} to cancel"

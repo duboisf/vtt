@@ -68,6 +68,7 @@ type OverlayUI interface {
 	ShowListening(windowClass, hotkeyMode string)
 	SetConnected(windowClass string)
 	SetConnecting(attempt, max int)
+	SetLoadingModel(modelName string)
 	SetSubmitMode(enabled bool)
 	SetListeningText(windowClass, text string)
 	AnimateChunk(text string)
@@ -302,6 +303,26 @@ func (a *App) startRecordingLocked(ctx context.Context) {
 	spanCtx, recordingSpan := telemetry.StartSpan(ctx, "vocis.dictation",
 		attribute.String("hotkey.backend", a.hotkeyBackend),
 	)
+
+	// Preflight: make sure the configured transcription model is resident
+	// on the Lemonade backend before we start capturing audio. On a cold
+	// audio slot the on-demand load is 5–10 s; triggering it lazily on
+	// the WS realtime path shows up as "no transcript ever arrives"
+	// because audio is flowing while the model is still loading. No-op
+	// for OpenAI. Runs inline so the overlay clearly says "Loading X..."
+	// while the user waits, rather than an ambiguous connecting spinner.
+	if err := transcribe.EnsureTranscribeModelLoaded(spanCtx, a.cfg.Transcription, func(model string) {
+		a.overlay.SetLoadingModel(model)
+		recordingSpan.AddEvent("lemonade.model.loading",
+			trace.WithAttributes(attribute.String("model", model)),
+		)
+	}); err != nil {
+		a.ducker.Restore()
+		telemetry.EndSpan(recordingSpan, err)
+		sessionlog.Errorf("transcription model preflight: %v", err)
+		a.overlay.ShowError(fmt.Errorf("model load failed: %w", err))
+		return
+	}
 
 	session, err := a.recorder.Start(spanCtx, a.cfg.Recording)
 	if err != nil {
