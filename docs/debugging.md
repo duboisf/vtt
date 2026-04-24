@@ -4,14 +4,33 @@
 
 Each `serve` session writes a log file under `~/.local/state/vocis/sessions/`. Files are named by timestamp (e.g. `20260410-103747.log`) and cleaned up after 7 days.
 
-Log levels: `DEBUG`, `INFO`, `WARN`, `ERROR`. Structured fields use key=value format (e.g. `duration=5.4s`, `chars=53`).
+Log levels: `TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`. Structured fields use key=value format (e.g. `duration=5.4s`, `chars=53`).
 
-Useful things to look for:
+### Convention
 
-- `postprocess` — input/output text (DEBUG), timeouts, errors
-- `finalization` — trailing transcript assembly, commit errors
-- `duck` — audio volume ducking/restore
-- `hotkey` — fallback decisions, registration failures
+Every meaningful branch leaves a trail. New features and guards must log when they fire — if a user pastes their session log into a bug report, the transcript should show which code paths ran. Level guide:
+
+- `TRACE` — high-volume protocol events (every WS frame, audio tail pad). Cheap, verbose.
+- `DEBUG` — routine state transitions, one-shot protocol decisions, internal handoffs.
+- `INFO` — user-visible decisions (filtered hallucination, submit mode toggle, config reload, dictation started/stopped).
+- `WARN` — recoverable problems (postprocess timeout, empty transcript, unknown event type).
+- `ERROR` — fatal to the current operation (dial failed, commit refused with non-empty reason).
+
+If an event is filtered from the existing trace machinery (e.g. `dumpWSFrame` skipping outbound `input_audio_buffer.append` to keep the log readable), add an explicit log so the behavior stays visible.
+
+### Useful things to look for
+
+- `ws ←` / `ws →` — every inbound / outbound WS frame except audio append spam. Cumulative deltas, commits, VAD events all appear here.
+- `dropped hallucinated final:` — the hallucination filter caught a Whisper/Gemma stock phrase ("Thank you.", etc.). See `transcription.hallucination_filters`.
+- `tail silence pad:` — the pre-commit silence appended so the last word doesn't get eaten. See `streaming.tail_silence_ms`.
+- `realtime: session.updated payload=` — what the backend echoed back after our `session.update`. Shows which fields the server actually honored (Lemonade silently discards unknown keys like `prompt` and `noise_reduction`).
+- `realtime: delta event has empty text under 'delta' key` — a backend emitted a transcription delta with no text under the spec-standard field. Diagnostic for backend field-name mismatches.
+- `realtime: input_audio_buffer.committed` — server-side commit acknowledged. Combined with the fast-path decision in `collectTrailing`, lets you see whether a release-time commit was skipped.
+- `postprocess` — input/output text (DEBUG), timeouts, errors.
+- `finalization` — trailing transcript assembly, commit errors.
+- `duck` — audio volume ducking/restore.
+- `hotkey` — fallback decisions, registration failures.
+- `submit mode:` — Enter-after-paste decision. See `insertion.auto_submit`.
 
 ## Tracing (Jaeger)
 
