@@ -72,9 +72,9 @@ type OverlayUI interface {
 	SetSubmitMode(enabled bool)
 	SetListeningText(windowClass, text string)
 	AnimateChunk(text string)
-	ShowFinishing(body, shortcut string, timeout time.Duration)
-	SetFinishingPhase(label string, timeout time.Duration)
-	ExtendFinishingPhase(label string, timeout time.Duration)
+	ShowFinishing(body, shortcut string)
+	SetFinishingPhase(label string)
+	ExtendFinishingPhase(label string)
 	SetFinishingText(body string)
 	ShowSuccess(text string)
 	ShowError(err error)
@@ -425,11 +425,8 @@ func (a *App) stopRecordingLocked(ctx context.Context) {
 	state := a.recording
 	a.recording = nil
 	a.transcribing = true
-	finishTimeout := a.estimateFinishTimeout(state)
-	a.overlay.ShowFinishing(state.displayText, a.shortcut, finishTimeout)
-	state.span.AddEvent("overlay.finishing",
-		trace.WithAttributes(attribute.String("timeout", finishTimeout.String())),
-	)
+	a.overlay.ShowFinishing(state.displayText, a.shortcut)
+	state.span.AddEvent("overlay.finishing")
 	sessionlog.Infof("stopping recording duration=%s",
 		time.Since(state.startedAt).Round(10*time.Millisecond))
 
@@ -489,13 +486,9 @@ func (a *App) forceStopAfter(ctx context.Context, id uint64, maxDuration time.Du
 	a.transcribing = true
 	a.mu.Unlock()
 
-	finishTimeout := a.estimateFinishTimeout(state)
-	a.overlay.ShowFinishing(state.displayText, a.shortcut, finishTimeout)
+	a.overlay.ShowFinishing(state.displayText, a.shortcut)
 	state.span.AddEvent("overlay.finishing",
-		trace.WithAttributes(
-			attribute.String("timeout", finishTimeout.String()),
-			attribute.Bool("auto_stop", true),
-		),
+		trace.WithAttributes(attribute.Bool("auto_stop", true)),
 	)
 	sessionlog.Warnf("auto-stopping recording after timeout")
 	go a.finishRecording(ctx, state)
@@ -547,13 +540,9 @@ func (a *App) finishRecording(ctx context.Context, state *recordingState) {
 	sessionlog.Infof("audio captured bytes=%d duration=%s",
 		state.session.BytesCaptured(), state.session.Duration().Round(10*time.Millisecond))
 
-	finishTimeout := a.estimateFinishTimeout(state)
-	sessionlog.Infof("finalizing recording=%s timeout=%s",
-		state.session.Duration().Round(10*time.Millisecond), finishTimeout.Round(100*time.Millisecond))
-	transcribeCtx, transcribeCancel := context.WithTimeout(
-		spanCtx,
-		finishTimeout,
-	)
+	sessionlog.Infof("finalizing recording=%s (no timeout — elapsed counter replaces deadline)",
+		state.session.Duration().Round(10*time.Millisecond))
+	transcribeCtx, transcribeCancel := context.WithCancel(spanCtx)
 	defer transcribeCancel()
 
 	a.mu.Lock()
@@ -617,12 +606,8 @@ func (a *App) finishRecording(ctx context.Context, state *recordingState) {
 
 	postProcessSkipped := false
 	if a.cfg.PostProcess.Enabled {
-		firstTokenDuration := time.Duration(a.cfg.PostProcess.FirstTokenTimeoutSec) * time.Second
-		totalDuration := time.Duration(a.cfg.PostProcess.TotalTimeoutSec) * time.Second
-		a.overlay.SetFinishingPhase(a.cfg.Overlay.Finishing.PPWait, firstTokenDuration)
-		state.span.AddEvent("overlay.phase.wait",
-			trace.WithAttributes(attribute.String("timeout", firstTokenDuration.String())),
-		)
+		a.overlay.SetFinishingPhase(a.cfg.Overlay.Finishing.PPWait)
+		state.span.AddEvent("overlay.phase.wait")
 		ppSpanCtx, ppSpan := telemetry.StartSpan(spanCtx, "vocis.postprocess",
 			attribute.Int("input.length", len(text)),
 			attribute.String("model", a.cfg.PostProcess.Model),
@@ -632,10 +617,7 @@ func (a *App) finishRecording(ctx context.Context, state *recordingState) {
 		resultCh := make(chan transcribe.PostProcessResult, 1)
 		go func() {
 			resultCh <- a.transcribe.PostProcess(ppCtx, a.cfg.PostProcess, text, func() {
-				remaining := totalDuration - firstTokenDuration
-				if remaining > 0 {
-					a.overlay.ExtendFinishingPhase(a.cfg.Overlay.Finishing.PPStream, remaining)
-				}
+				a.overlay.ExtendFinishingPhase(a.cfg.Overlay.Finishing.PPStream)
 			})
 		}()
 
@@ -710,27 +692,6 @@ func (a *App) monitorRecordingLevel(ctx context.Context, id uint64, session *rec
 
 		a.overlay.SetLevel(session.Level())
 	}
-}
-
-func (a *App) estimateFinishTimeout(state *recordingState) time.Duration {
-	estimate := state.session.Duration() / 5
-	// Floor must accommodate the inner wait_final budget plus a small margin
-	// for the drain (250ms) and commit round-trip. Otherwise the outer
-	// context cancels waitForFinal before it can reach its own floor — the
-	// failure mode looks like "context deadline exceeded at exactly 5s"
-	// regardless of what you set wait_final_seconds to.
-	innerFloor := time.Duration(a.cfg.Streaming.WaitFinalSeconds)*time.Second + 2*time.Second
-	if innerFloor < 5*time.Second {
-		innerFloor = 5 * time.Second
-	}
-	if estimate < innerFloor {
-		estimate = innerFloor
-	}
-	cap := time.Duration(a.cfg.Transcription.RequestLimit) * time.Second
-	if estimate > cap {
-		estimate = cap
-	}
-	return estimate
 }
 
 func (a *App) hotkeyHint(shortcut string) string {

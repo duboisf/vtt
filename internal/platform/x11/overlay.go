@@ -55,7 +55,7 @@ type Overlay struct {
 
 	countdownReset  chan countdownPhase
 	countdownExtend chan countdownPhase
-	completedPhases []string
+	completedPhases []string // pre-formatted: "Wrapping up — done (2.3s)"
 
 	escapeCh      chan struct{}
 	escapeGrabbed bool
@@ -65,8 +65,7 @@ type Overlay struct {
 }
 
 type countdownPhase struct {
-	label   string
-	timeout time.Duration
+	label string
 }
 
 type viewState struct {
@@ -259,7 +258,7 @@ func (o *Overlay) AnimateChunk(text string) {
 	go o.animateChunk(token, ui.Shorten(text, o.renderer.BodyTextLimit()))
 }
 
-func (o *Overlay) ShowFinishing(body, shortcut string, timeout time.Duration) {
+func (o *Overlay) ShowFinishing(body, shortcut string) {
 	var suffix string
 	if shortcut != "" {
 		suffix = " " + config.ExpandTemplate(o.cfg.Finishing.CancelHint, map[string]string{
@@ -270,7 +269,7 @@ func (o *Overlay) ShowFinishing(body, shortcut string, timeout time.Duration) {
 	o.show(viewState{
 		title:         o.cfg.Finishing.Title,
 		titleSuffix:   suffix,
-		subtitle:      formatCountdown(o.cfg.Finishing.WrappingUp, timeout),
+		subtitle:      formatElapsed(o.cfg.Finishing.WrappingUp, 0),
 		body:          body,
 		accent:        color.RGBA{R: 96, G: 165, B: 250, A: 255},
 		heartbeatWave: true,
@@ -282,17 +281,17 @@ func (o *Overlay) ShowFinishing(body, shortcut string, timeout time.Duration) {
 	o.countdownExtend = make(chan countdownPhase, 1)
 	o.mu.Unlock()
 
-	go o.animateCountdown(countdownPhase{label: o.cfg.Finishing.WrappingUp, timeout: timeout})
+	go o.animateElapsed(countdownPhase{label: o.cfg.Finishing.WrappingUp})
 }
 
-func (o *Overlay) SetFinishingPhase(label string, timeout time.Duration) {
+func (o *Overlay) SetFinishingPhase(label string) {
 	o.mu.Lock()
 	ch := o.countdownReset
 	o.mu.Unlock()
 
 	if ch != nil {
 		select {
-		case ch <- countdownPhase{label: label, timeout: timeout}:
+		case ch <- countdownPhase{label: label}:
 		default:
 		}
 	}
@@ -300,14 +299,14 @@ func (o *Overlay) SetFinishingPhase(label string, timeout time.Duration) {
 
 // ExtendFinishingPhase transitions the current phase to a second sub-phase
 // shown inline (e.g. "Wait · Stream... (10.0s)") without completing it.
-func (o *Overlay) ExtendFinishingPhase(label string, timeout time.Duration) {
+func (o *Overlay) ExtendFinishingPhase(label string) {
 	o.mu.Lock()
 	ch := o.countdownExtend
 	o.mu.Unlock()
 
 	if ch != nil {
 		select {
-		case ch <- countdownPhase{label: label, timeout: timeout}:
+		case ch <- countdownPhase{label: label}:
 		default:
 		}
 	}
@@ -326,29 +325,28 @@ func (o *Overlay) SetFinishingText(body string) {
 
 func (o *Overlay) buildSubtitle(activeLine string) string {
 	var lines []string
-	for _, done := range o.completedPhases {
-		lines = append(lines, done+" — "+o.cfg.Finishing.PhaseDone)
-	}
+	lines = append(lines, o.completedPhases...)
 	lines = append(lines, activeLine)
 	return strings.Join(lines, "\n")
 }
 
-func formatCountdown(label string, remaining time.Duration) string {
-	if remaining <= 0 {
-		return label + "..."
-	}
-	return fmt.Sprintf("%s... (%.1fs)", label, remaining.Seconds())
+func formatElapsed(label string, elapsed time.Duration) string {
+	return fmt.Sprintf("%s... (%.1fs)", label, elapsed.Seconds())
 }
 
-func formatTwoPhaseCountdown(doneLabel, activeLabel string, remaining time.Duration) string {
-	if remaining <= 0 {
-		return doneLabel + " · " + activeLabel + "..."
-	}
-	return fmt.Sprintf("%s · %s... (%.1fs)", doneLabel, activeLabel, remaining.Seconds())
+func formatTwoPhaseElapsed(doneLabel, activeLabel string, elapsed time.Duration) string {
+	return fmt.Sprintf("%s · %s... (%.1fs)", doneLabel, activeLabel, elapsed.Seconds())
 }
 
-func (o *Overlay) animateCountdown(phase countdownPhase) {
-	deadline := time.Now().Add(phase.timeout)
+// phaseDoneLine formats a completed phase with its final elapsed duration,
+// e.g. "Wrapping up — done (2.3s)". Pushed onto completedPhases so the user
+// can see how long each stage of finishing took.
+func (o *Overlay) phaseDoneLine(label string, elapsed time.Duration) string {
+	return fmt.Sprintf("%s — %s (%.1fs)", label, o.cfg.Finishing.PhaseDone, elapsed.Seconds())
+}
+
+func (o *Overlay) animateElapsed(phase countdownPhase) {
+	start := time.Now()
 	label := phase.label
 	doneLabel := "" // set when extended; makes the line two-phase
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -359,34 +357,34 @@ func (o *Overlay) animateCountdown(phase countdownPhase) {
 	extendCh := o.countdownExtend
 	o.mu.Unlock()
 
-	activeCountdown := func(remaining time.Duration) string {
+	activeElapsed := func(elapsed time.Duration) string {
 		if doneLabel != "" {
-			return formatTwoPhaseCountdown(doneLabel, label, remaining)
+			return formatTwoPhaseElapsed(doneLabel, label, elapsed)
 		}
-		return formatCountdown(label, remaining)
+		return formatElapsed(label, elapsed)
 	}
 
 	for {
 		select {
 		case newPhase := <-resetCh:
 			o.mu.Lock()
+			completedLabel := label
 			if doneLabel != "" {
-				o.completedPhases = append(o.completedPhases, doneLabel+" · "+label)
-			} else {
-				o.completedPhases = append(o.completedPhases, label)
+				completedLabel = doneLabel + " · " + label
 			}
+			o.completedPhases = append(o.completedPhases, o.phaseDoneLine(completedLabel, time.Since(start)))
 			label = newPhase.label
 			doneLabel = ""
-			deadline = time.Now().Add(newPhase.timeout)
-			o.state.subtitle = o.buildSubtitle(formatCountdown(label, newPhase.timeout))
+			start = time.Now()
+			o.state.subtitle = o.buildSubtitle(formatElapsed(label, 0))
 			o.drawLocked()
 			o.mu.Unlock()
 		case ext := <-extendCh:
 			o.mu.Lock()
 			doneLabel = label
 			label = ext.label
-			deadline = time.Now().Add(ext.timeout)
-			o.state.subtitle = o.buildSubtitle(activeCountdown(ext.timeout))
+			start = time.Now()
+			o.state.subtitle = o.buildSubtitle(activeElapsed(0))
 			o.drawLocked()
 			o.mu.Unlock()
 		case <-ticker.C:
@@ -395,18 +393,7 @@ func (o *Overlay) animateCountdown(phase countdownPhase) {
 				o.mu.Unlock()
 				return
 			}
-			remaining := time.Until(deadline)
-			if remaining <= 0 {
-				activeLabel := label
-				if doneLabel != "" {
-					activeLabel = doneLabel + " · " + label
-				}
-				o.state.subtitle = o.buildSubtitle(config.ExpandTemplate(o.cfg.Finishing.TimedOut, map[string]string{"phase": activeLabel}))
-				o.drawLocked()
-				o.mu.Unlock()
-				return
-			}
-			o.state.subtitle = o.buildSubtitle(activeCountdown(remaining))
+			o.state.subtitle = o.buildSubtitle(activeElapsed(time.Since(start)))
 			o.drawLocked()
 			o.mu.Unlock()
 		}

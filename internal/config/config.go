@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -333,7 +334,6 @@ type OverlayFinish struct {
 	PostProcessing string `yaml:"post_processing"`
 	PPWait         string `yaml:"pp_wait"`
 	PPStream       string `yaml:"pp_stream"`
-	TimedOut       string `yaml:"timed_out"`
 	PhaseDone      string `yaml:"phase_done"`
 }
 
@@ -473,7 +473,6 @@ func Default() Config {
 				PostProcessing: "Post-processing",
 				PPWait:         "Wait",
 				PPStream:       "Stream",
-				TimedOut:       "{phase} — timed out",
 				PhaseDone:      "done",
 			},
 			Success: OverlaySuccess{
@@ -595,11 +594,28 @@ func Load() (Config, string, error) {
 	}
 
 	cfg := Default()
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	if err := decodeStrict(data, &cfg); err != nil {
 		return Config{}, "", fmt.Errorf("decode %s: %w", path, err)
 	}
 
 	return cfg, path, cfg.Validate()
+}
+
+// decodeStrict unmarshals YAML into cfg with KnownFields(true), so any key
+// that doesn't map to a struct field makes Load fail. This prevents silent
+// drift: stale fields left in a user's config after a rename/removal will
+// surface as a startup error demanding the user clean them up instead of
+// being silently ignored.
+func decodeStrict(data []byte, cfg *Config) error {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(cfg); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // rejectDeprecatedKeys fails loudly on config files that still use
@@ -825,7 +841,6 @@ func (c Config) validateOverlayTemplates() {
 		{"overlay.listening.connected", c.Overlay.Listening.Connected, []string{"window"}},
 		{"overlay.listening.reconnecting", c.Overlay.Listening.Reconnecting, []string{"attempt", "max"}},
 		{"overlay.finishing.cancel_hint", c.Overlay.Finishing.CancelHint, []string{"shortcut"}},
-		{"overlay.finishing.timed_out", c.Overlay.Finishing.TimedOut, []string{"phase"}},
 	}
 	for _, tt := range templates {
 		for _, w := range ValidateTemplate(tt.template, tt.expected) {

@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"testing"
-	"time"
 
 	"vocis/internal/config"
 	"vocis/internal/transcribe"
@@ -279,9 +278,9 @@ func (o *overlayStub) SetSubmitMode(bool)             {}
 func (o *overlayStub) AnimateChunk(text string) {
 	o.animatedChunks = append(o.animatedChunks, text)
 }
-func (o *overlayStub) ShowFinishing(string, string, time.Duration) {}
-func (o *overlayStub) SetFinishingPhase(string, time.Duration)    {}
-func (o *overlayStub) ExtendFinishingPhase(string, time.Duration) {}
+func (o *overlayStub) ShowFinishing(string, string) {}
+func (o *overlayStub) SetFinishingPhase(string)     {}
+func (o *overlayStub) ExtendFinishingPhase(string)  {}
 func (o *overlayStub) SetFinishingText(string)                    {}
 func (o *overlayStub) ShowSuccess(text string) {
 	o.successText = text

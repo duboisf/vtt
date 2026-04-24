@@ -172,7 +172,6 @@ overlay:
     cancel_hint: "— press {shortcut} to cancel"
     wrapping_up: Wrapping up
     post_processing: Post-processing
-    timed_out: "{phase} — timed out"
     phase_done: done
   success:
     title: Typed

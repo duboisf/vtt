@@ -52,7 +52,7 @@ sequenceDiagram
     Note over User,PostProcess: Record Stop
 
     User->>App: Release all keys (Up)
-    App->>Overlay: ShowFinishing (heartbeat + countdown)
+    App->>Overlay: ShowFinishing (heartbeat + elapsed timer)
     App->>Overlay: GrabEscape
     App->>Recorder: Stop capture
 
@@ -69,11 +69,11 @@ sequenceDiagram
     App->>Overlay: SetFinishingText (full text with newlines)
 
     alt Post-processing enabled & enough words
-        App->>Overlay: SetFinishingPhase("Post-processing", firstTokenTimeout)
+        App->>Overlay: SetFinishingPhase("Wait")
         App->>PostProcess: Stream cleanup (two-phase timeout)
         alt First token arrives
             PostProcess-->>App: onFirstToken callback
-            App->>Overlay: SetFinishingPhase("Post-processing", remainingTotalTimeout)
+            App->>Overlay: ExtendFinishingPhase("Stream")
             PostProcess-->>App: Cleaned text
         else User presses Escape
             App->>App: Skip, use raw text
@@ -147,17 +147,17 @@ When the hotkey stops dictation:
 
 1. [`internal/app/app.go`](/home/fred/git/vtt/internal/app/app.go) stops local recording.
 2. The Escape key is temporarily grabbed for the finishing state.
-3. The overlay switches to the "Finishing" state with a heartbeat wave animation, showing the accumulated text and a countdown timer. The countdown is proportional to recording duration: `max(5s, duration/5)`.
+3. The overlay switches to the "Finishing" state with a heartbeat wave animation, showing the accumulated text and an elapsed-time counter that ticks up from 0 (e.g. `Wrapping up... (2.3s)`). There is no outer deadline on the finalize call — the counter runs until the transcription completes or the user cancels.
 4. The user can press the hotkey during this state to cancel the in-flight transcription. The overlay shows "Cancelled — transcription discarded".
 5. [`internal/transcribe/transcribe.go`](/home/fred/git/vtt/internal/transcribe/transcribe.go) finalizes the `DictationSession` via `collectTrailing`:
    - `drainPendingSegments`: collects any segment results that arrived between recording stop and finalization (250ms window).
    - If all audio was consumed by live segments and no trailing audio remains, finalization returns immediately.
    - Otherwise, `stream.Commit` sends the trailing audio and `waitForFinal` waits for the transcript with a proportional timeout.
    - Empty commit errors are expected when all audio was consumed by segments and are handled gracefully.
-6. The overlay updates to show the complete transcription text (segments + trailing) with newlines preserved.
+6. The overlay updates to show the complete transcription text (segments + trailing) with newlines preserved. The finished "Wrapping up" phase is pushed onto a completed-phases list with its elapsed duration (e.g. `Wrapping up — done (2.3s)`) so the user can see how long finalization actually took.
 7. If post-processing is enabled and the text has enough words (`postprocess.min_word_count`):
-   - The overlay countdown starts with `first_token_timeout_seconds` (default 10s). This is how long we wait for the model to start responding.
-   - When the first token arrives, the countdown extends to the remaining `total_timeout_seconds` (default 15s) for the full streamed response.
+   - The overlay shows a new `Wait...` phase counting up from 0. Internal first-token / total timeouts still apply inside the post-processing call — they are enforced but not displayed.
+   - When the first token arrives, the phase extends in place to `Wait · Stream... (elapsed)`, again counting up from 0 for the streaming portion.
    - If no first token arrives within the first-token timeout, raw text is pasted immediately (the model is likely stuck).
    - Pressing Escape during either phase skips post-processing and pastes raw text.
    - If the stream errors or returns empty, raw text is pasted with a yellow warning overlay.
@@ -216,8 +216,8 @@ When telemetry is enabled, the following OpenTelemetry spans are emitted per dic
     - `overlay.connecting` (`attempt`, `max`) — WebSocket connection attempt
     - `overlay.connected` — connection established
     - `overlay.submit_mode` (`enabled`) — user toggled submit mode
-    - `overlay.finishing` (`timeout`, `auto_stop`) — recording stopped, entering finish phase
-    - `overlay.phase.wait` (`timeout`) — post-processing wait phase started
+    - `overlay.finishing` (`auto_stop`) — recording stopped, entering finish phase
+    - `overlay.phase.wait` — post-processing wait phase started
     - `overlay.warning` (`reason`) — warning shown (e.g. `postprocess_skipped`)
     - `overlay.success` — transcription inserted successfully
   - Child spans:

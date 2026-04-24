@@ -3,9 +3,11 @@ package x11
 import (
 	"os"
 	"testing"
+	"time"
 
 	"github.com/BurntSushi/xgbutil"
 
+	"vocis/internal/config"
 	"vocis/internal/ui"
 )
 
@@ -139,4 +141,36 @@ func TestUngrabEscapeIsIdempotent(t *testing.T) {
 	// Should not panic when not grabbed.
 	o.UngrabEscape()
 	o.UngrabEscape()
+}
+
+func TestFormatElapsedCountsUpFromZero(t *testing.T) {
+	t.Parallel()
+
+	if got := formatElapsed("Wrapping up", 0); got != "Wrapping up... (0.0s)" {
+		t.Fatalf("formatElapsed(0) = %q, want %q", got, "Wrapping up... (0.0s)")
+	}
+	if got := formatElapsed("Wrapping up", 2300*time.Millisecond); got != "Wrapping up... (2.3s)" {
+		t.Fatalf("formatElapsed(2.3s) = %q, want %q", got, "Wrapping up... (2.3s)")
+	}
+}
+
+func TestFormatTwoPhaseElapsed(t *testing.T) {
+	t.Parallel()
+
+	got := formatTwoPhaseElapsed("Wait", "Stream", 1800*time.Millisecond)
+	if got != "Wait · Stream... (1.8s)" {
+		t.Fatalf("formatTwoPhaseElapsed = %q, want %q", got, "Wait · Stream... (1.8s)")
+	}
+}
+
+func TestPhaseDoneLineIncludesElapsed(t *testing.T) {
+	t.Parallel()
+
+	o := &Overlay{cfg: config.OverlayConfig{
+		Finishing: config.OverlayFinish{PhaseDone: "done"},
+	}}
+	got := o.phaseDoneLine("Wrapping up", 2300*time.Millisecond)
+	if got != "Wrapping up — done (2.3s)" {
+		t.Fatalf("phaseDoneLine = %q, want %q", got, "Wrapping up — done (2.3s)")
+	}
 }
