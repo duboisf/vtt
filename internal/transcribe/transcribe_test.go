@@ -471,6 +471,77 @@ func TestDictationSessionHandleStreamEventEmitsLiveSegment(t *testing.T) {
 	}
 }
 
+func TestDictationSessionDropsHallucinatedFinal(t *testing.T) {
+	t.Parallel()
+
+	session := &DictationSession{
+		events:               make(chan DictationEvent, 1),
+		finals:               make(chan finalResult, 4),
+		hallucinationFilters: buildHallucinationSet([]string{"Thank you.", "Bye."}),
+	}
+	session.liveSegments.Store(true)
+
+	for _, text := range []string{"Thank you.", "thank you.", "  Thank you.  ", "BYE."} {
+		err := session.handleStreamEvent(StreamEvent{Type: StreamEventFinal, Text: text})
+		if err != nil {
+			t.Fatalf("handleStreamEvent(%q): %v", text, err)
+		}
+		select {
+		case evt := <-session.events:
+			t.Fatalf("hallucination %q leaked as event %+v", text, evt)
+		default:
+		}
+		// During live segments, no empty final should be pushed — otherwise
+		// drainPendingSegments would be nudged every hallucination.
+		select {
+		case r := <-session.finals:
+			t.Fatalf("hallucination %q leaked as final %+v during live segments", text, r)
+		default:
+		}
+	}
+
+	// Legitimate final must still pass through.
+	if err := session.handleStreamEvent(StreamEvent{Type: StreamEventFinal, Text: "real content"}); err != nil {
+		t.Fatalf("handleStreamEvent real: %v", err)
+	}
+	select {
+	case evt := <-session.events:
+		if evt.Type != DictationEventSegment || evt.Text != "real content" {
+			t.Fatalf("real final = %+v, want segment 'real content'", evt)
+		}
+	default:
+		t.Fatal("real final dropped")
+	}
+}
+
+// TestDictationSessionHallucinationAfterFinalizeUnblocksWaiter pins the
+// fix for the hang: once Finalize flips liveSegments off, the caller is
+// parked on the finals channel. Dropping a hallucination in that window
+// must still push an empty result or finalize spins for the full
+// wait_final timeout before failing with context deadline exceeded.
+func TestDictationSessionHallucinationAfterFinalizeUnblocksWaiter(t *testing.T) {
+	t.Parallel()
+
+	session := &DictationSession{
+		events:               make(chan DictationEvent, 1),
+		finals:               make(chan finalResult, 1),
+		hallucinationFilters: buildHallucinationSet([]string{"Thank you."}),
+	}
+	// liveSegments = false simulates post-Finalize state.
+
+	if err := session.handleStreamEvent(StreamEvent{Type: StreamEventFinal, Text: "Thank you."}); err != nil {
+		t.Fatalf("handleStreamEvent: %v", err)
+	}
+	select {
+	case r := <-session.finals:
+		if r.text != "" || r.err != nil {
+			t.Fatalf("final = %+v, want empty text + nil err", r)
+		}
+	default:
+		t.Fatal("expected empty final to unblock finalize waiter after hallucination drop")
+	}
+}
+
 func TestDictationSessionHandleStreamEventQueuesFinalAfterLiveDisabled(t *testing.T) {
 	t.Parallel()
 
@@ -498,6 +569,40 @@ func TestDictationSessionHandleStreamEventQueuesFinalAfterLiveDisabled(t *testin
 		}
 	default:
 		t.Fatal("expected queued final result")
+	}
+}
+
+// TestStatsInPostCommittedSilenceTracksServerVADCycle pins the state
+// machine behind the Finalize fast-path that skips an unnecessary commit
+// when the server has already committed an utterance on its own.
+func TestStatsInPostCommittedSilenceTracksServerVADCycle(t *testing.T) {
+	t.Parallel()
+
+	stats := newStats()
+	now := time.Now()
+
+	// speech_started: server VAD detected an utterance beginning.
+	stats.observeInbound(now, jsonMessage{"type": "input_audio_buffer.speech_started"})
+	if stats.InPostCommittedSilence {
+		t.Fatal("speech_started must not set InPostCommittedSilence")
+	}
+
+	// speech_stopped: end of utterance detected, but buffer not yet committed.
+	stats.observeInbound(now, jsonMessage{"type": "input_audio_buffer.speech_stopped"})
+	if stats.InPostCommittedSilence {
+		t.Fatal("speech_stopped must not set InPostCommittedSilence")
+	}
+
+	// committed: server VAD drained the buffer.
+	stats.observeInbound(now, jsonMessage{"type": "input_audio_buffer.committed"})
+	if !stats.InPostCommittedSilence {
+		t.Fatal("input_audio_buffer.committed must set InPostCommittedSilence")
+	}
+
+	// Next utterance begins → flag clears so a real commit would fire.
+	stats.observeInbound(now, jsonMessage{"type": "input_audio_buffer.speech_started"})
+	if stats.InPostCommittedSilence {
+		t.Fatal("next speech_started must clear InPostCommittedSilence")
 	}
 }
 
@@ -724,14 +829,12 @@ func assertTurnDetection(t *testing.T, value any, wantSegment bool) {
 	if got := turnDetection["type"]; got != "server_vad" {
 		t.Fatalf("turn_detection.type = %v", got)
 	}
-	if got := int(turnDetection["prefix_padding_ms"].(float64)); got != 300 {
-		t.Fatalf("turn_detection.prefix_padding_ms = %d", got)
-	}
-	if got := int(turnDetection["silence_duration_ms"].(float64)); got != 500 {
-		t.Fatalf("turn_detection.silence_duration_ms = %d", got)
-	}
-	if got := turnDetection["threshold"].(float64); got != 0.02 {
-		t.Fatalf("turn_detection.threshold = %v", got)
+	// Zero-valued knobs are omitted so OpenAI's own server-VAD defaults
+	// apply; only `type: server_vad` is required.
+	for _, key := range []string{"prefix_padding_ms", "silence_duration_ms", "threshold"} {
+		if _, present := turnDetection[key]; present {
+			t.Fatalf("turn_detection.%s should be omitted when zero in config, got %v", key, turnDetection[key])
+		}
 	}
 }
 

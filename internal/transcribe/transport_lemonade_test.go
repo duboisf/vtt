@@ -164,6 +164,78 @@ func TestLemonadeTransportSessionUpdateManualCommit(t *testing.T) {
 	}
 }
 
+// TestLemonadeTransportSessionUpdateOmitsZeroVADFields verifies that zero
+// values for the three turn_detection knobs cause vocis to omit them,
+// letting Lemonade apply its own server-VAD defaults. When ALL three
+// are zero, the turn_detection key is absent entirely.
+func TestLemonadeTransportSessionUpdateOmitsZeroVADFields(t *testing.T) {
+	t.Parallel()
+
+	t.Run("all zero omits turn_detection", func(t *testing.T) {
+		transport := newLemonadeTransport(
+			config.TranscriptionConfig{Backend: config.BackendLemonade, Model: "m"},
+			config.StreamingConfig{ManualCommit: false},
+			time.Second,
+		)
+		session := transport.SessionUpdate()["session"].(map[string]any)
+		if _, present := session["turn_detection"]; present {
+			t.Fatalf("turn_detection key must be omitted when all knobs are zero, got %v", session["turn_detection"])
+		}
+	})
+
+	t.Run("partial override keeps only set fields", func(t *testing.T) {
+		transport := newLemonadeTransport(
+			config.TranscriptionConfig{Backend: config.BackendLemonade, Model: "m"},
+			config.StreamingConfig{ManualCommit: false, Threshold: 0.03},
+			time.Second,
+		)
+		session := transport.SessionUpdate()["session"].(map[string]any)
+		td, ok := session["turn_detection"].(map[string]any)
+		if !ok {
+			t.Fatalf("turn_detection should be a map when one field is set, got %T", session["turn_detection"])
+		}
+		if td["threshold"] != 0.03 {
+			t.Fatalf("threshold = %v, want 0.03", td["threshold"])
+		}
+		if _, present := td["silence_duration_ms"]; present {
+			t.Fatalf("silence_duration_ms must be omitted when zero")
+		}
+		if _, present := td["prefix_padding_ms"]; present {
+			t.Fatalf("prefix_padding_ms must be omitted when zero")
+		}
+	})
+}
+
+// TestLemonadeTransportSessionUpdateCarriesPromptAndNoiseReduction pins
+// that prompt_hint and streaming.noise_reduction land in the flat
+// session.update payload at the right keys, so a future Lemonade schema
+// addition for either field works without a client change.
+func TestLemonadeTransportSessionUpdateCarriesPromptAndNoiseReduction(t *testing.T) {
+	t.Parallel()
+
+	transport := newLemonadeTransport(
+		config.TranscriptionConfig{
+			Backend:    config.BackendLemonade,
+			Model:      "m",
+			PromptHint: "Use technical spelling.",
+		},
+		config.StreamingConfig{NoiseReduction: "near_field"},
+		time.Second,
+	)
+	session := transport.SessionUpdate()["session"].(map[string]any)
+
+	if got := session["prompt"]; got != "Use technical spelling." {
+		t.Fatalf("prompt = %v, want \"Use technical spelling.\"", got)
+	}
+	nr, ok := session["noise_reduction"].(map[string]any)
+	if !ok {
+		t.Fatalf("noise_reduction = %T, want map[string]any", session["noise_reduction"])
+	}
+	if nr["type"] != "near_field" {
+		t.Fatalf("noise_reduction.type = %v, want near_field", nr["type"])
+	}
+}
+
 func TestLemonadeTransportSampleRate(t *testing.T) {
 	t.Parallel()
 	transport := newLemonadeTransport(config.TranscriptionConfig{Backend: config.BackendLemonade}, config.StreamingConfig{}, time.Second)

@@ -180,13 +180,19 @@ type Stats struct {
 	LastSpeechStoppedAt  time.Time
 	SpeechStartedCount   int
 	SpeechStoppedCount   int
-	CommitAt             time.Time
-	FirstPostCommitType  string
-	FirstPostCommitAt    time.Time
-	FirstPostCommitDelta string
-	DeltaCountPostCommit int
-	CompletedText        string
-	CompletedAt          time.Time
+	// InPostCommittedSilence is true while vocis is in the silent window
+	// that follows a server-VAD-driven input_audio_buffer.committed and
+	// before the next speech_started. Finalize consults it to skip an
+	// unnecessary final commit (and the "buffer too small" empty-commit
+	// error log) when the user releases the hotkey during that gap.
+	InPostCommittedSilence bool
+	CommitAt               time.Time
+	FirstPostCommitType    string
+	FirstPostCommitAt      time.Time
+	FirstPostCommitDelta   string
+	DeltaCountPostCommit   int
+	CompletedText          string
+	CompletedAt            time.Time
 }
 
 func newStats() Stats {
@@ -207,6 +213,12 @@ type PreCommitContext struct {
 	MsSinceSpeechStopped    int64
 	AppendBytes             int64
 	AppendApproxMs          int64
+	// BufferDrainedByServerVAD is true when server VAD has already fired
+	// an input_audio_buffer.committed for the most recent utterance and
+	// no new speech_started has been observed since — i.e. the buffer is
+	// empty and sending a final commit would just produce the harmless
+	// "buffer too small" error. Lets Finalize skip the commit entirely.
+	BufferDrainedByServerVAD bool
 }
 
 // PostCommitStats summarizes everything that arrived between commit and the
@@ -365,7 +377,8 @@ func (s *Stream) Close() error {
 func (s *Stream) recordInbound(msg jsonMessage) {
 	now := time.Now()
 	if s.sessionSpan != nil {
-		s.sessionSpan.AddEvent("realtime.inbound",
+		name := inboundEventName(msg.Type())
+		s.sessionSpan.AddEvent(name,
 			trace.WithAttributes(inboundAttrs(now.Sub(s.sessionStart), msg)...))
 	}
 	if ref := s.postCommitSpan.Load(); ref != nil {
@@ -429,6 +442,24 @@ func postCommitEventAttrs(sinceCommit time.Duration, msg jsonMessage) (string, [
 	return "", nil, false
 }
 
+// inboundEventName maps a WS inbound message type to the span event name
+// used on the session span. Transcription-specific frames get distinct
+// names so delta/completed/failed are individually visible on the Jaeger
+// timeline; everything else stays under the generic realtime.inbound
+// bucket so session.updated / buffer events don't clutter the view.
+func inboundEventName(msgType string) string {
+	switch msgType {
+	case "conversation.item.input_audio_transcription.delta":
+		return "realtime.transcription.delta"
+	case "conversation.item.input_audio_transcription.completed":
+		return "realtime.transcription.completed"
+	case "conversation.item.input_audio_transcription.failed":
+		return "realtime.transcription.failed"
+	default:
+		return "realtime.inbound"
+	}
+}
+
 // inboundAttrs builds the OpenTelemetry attrs for a single inbound
 // message — pure function of (elapsed, msg) so it's trivially testable
 // and free of side effects.
@@ -482,9 +513,16 @@ func (st *Stats) observeInbound(now time.Time, msg jsonMessage) {
 		if st.FirstSpeechStartedAt.IsZero() {
 			st.FirstSpeechStartedAt = now
 		}
+		// New utterance underway → buffer has content again.
+		st.InPostCommittedSilence = false
 	case "input_audio_buffer.speech_stopped":
 		st.SpeechStoppedCount++
 		st.LastSpeechStoppedAt = now
+	case "input_audio_buffer.committed":
+		// Server-VAD-driven commit drained the buffer. Silent frames may
+		// still be flowing from the client, but they won't cause another
+		// utterance until VAD fires speech_started.
+		st.InPostCommittedSilence = true
 	case "conversation.item.input_audio_transcription.delta":
 		if !st.CommitAt.IsZero() && now.After(st.CommitAt) {
 			st.DeltaCountPostCommit++
@@ -549,6 +587,7 @@ func (s *Stream) PreCommitContext() PreCommitContext {
 		ctx.SpeechStoppedSeenBefore = true
 		ctx.MsSinceSpeechStopped = now.Sub(s.stats.LastSpeechStoppedAt).Milliseconds()
 	}
+	ctx.BufferDrainedByServerVAD = s.stats.InPostCommittedSilence
 	return ctx
 }
 
@@ -701,6 +740,9 @@ type DictationSession struct {
 	waitFinalFloorSeconds int
 	cancel                context.CancelFunc
 	callbacks             ConnectCallbacks
+	// hallucinationFilters is the set of exact transcripts to drop,
+	// keyed by lowercased+trimmed text for case-insensitive match.
+	hallucinationFilters map[string]bool
 
 	events   chan DictationEvent
 	pumpDone chan error
@@ -737,6 +779,7 @@ func (c *Client) StartDictation(ctx context.Context, opts DictationOpts) (*Dicta
 		waitFinalFloorSeconds: c.streaming.WaitFinalSeconds,
 		cancel:                cancel,
 		callbacks:             opts.Callbacks,
+		hallucinationFilters:  buildHallucinationSet(c.cfg.HallucinationFilters),
 		events:                make(chan DictationEvent, 16),
 		pumpDone:              make(chan error, 1),
 		finals:                make(chan finalResult, 8),
@@ -797,8 +840,19 @@ func (s *DictationSession) collectTrailing(ctx context.Context, stream *Stream) 
 		return FinalizeResult{Text: text}, nil
 	}
 
-	// Phase 2: commit trailing audio and wait for the final transcript.
+	// Server-VAD fast-path: if the last server event was
+	// input_audio_buffer.committed and no new speech_started has fired,
+	// the backend buffer is empty and a final commit would just return
+	// "buffer too small". Short-circuit to avoid the round-trip, the log
+	// warn, and the waitForFinal stall. Only safe when there's no
+	// in-flight partial — a non-empty partial means a completed event is
+	// still owed to us.
 	pre := stream.PreCommitContext()
+	if pre.BufferDrainedByServerVAD && strings.TrimSpace(stream.Partial()) == "" {
+		return FinalizeResult{Text: text}, nil
+	}
+
+	// Phase 2: commit trailing audio and wait for the final transcript.
 	_, commitSpan := telemetry.StartSpan(ctx, "vocis.transcribe.commit",
 		attribute.Int64("commit.pending_audio_bytes", pre.AppendBytes),
 		attribute.Int64("commit.pending_audio_ms", pre.AppendApproxMs),
@@ -1117,6 +1171,19 @@ func (s *DictationSession) handleStreamEvent(event StreamEvent) error {
 		if text == "" {
 			return nil
 		}
+		if s.isHallucination(text) {
+			sessionlog.Infof("dropped hallucinated final: %q", text)
+			s.hasTrailing.Store(false)
+			// If Finalize is already waiting on the finals channel
+			// (liveSegments flipped to false), we must still push
+			// something to unblock it — otherwise waitForFinal hangs
+			// until timeout. Push an empty result so finalize returns
+			// "no speech" cleanly.
+			if !s.liveSegments.Load() {
+				s.pushFinal("", nil)
+			}
+			return nil
+		}
 		s.hasTrailing.Store(false)
 		s.lastSegmentAt.Store(time.Now().UnixNano())
 		text = s.formatSegmentText(text)
@@ -1134,6 +1201,34 @@ func (s *DictationSession) handleStreamEvent(event StreamEvent) error {
 	default:
 		return nil
 	}
+}
+
+// isHallucination reports whether text exactly matches (case-insensitive,
+// already trimmed by caller) one of the configured stock phrases that
+// Whisper and Gemma-FLM emit on silence or near-silent audio.
+func (s *DictationSession) isHallucination(text string) bool {
+	if len(s.hallucinationFilters) == 0 {
+		return false
+	}
+	return s.hallucinationFilters[strings.ToLower(text)]
+}
+
+// buildHallucinationSet normalizes the configured filter list into a set
+// keyed by lowercased+trimmed text for O(1) case-insensitive lookup.
+// Empty entries are ignored.
+func buildHallucinationSet(filters []string) map[string]bool {
+	if len(filters) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(filters))
+	for _, f := range filters {
+		key := strings.ToLower(strings.TrimSpace(f))
+		if key == "" {
+			continue
+		}
+		set[key] = true
+	}
+	return set
 }
 
 // ---------------------------------------------------------------------------
@@ -1342,22 +1437,24 @@ func startsWithPunctuation(text string) bool {
 	}
 }
 
-// dumpWSFrame writes a single WebSocket frame to stderr when
-// VOCIS_WS_DUMP=1. Skips `input_audio_buffer.append` entirely (one frame
-// per ~50ms, kilobytes of base64 each — drowns the interesting protocol
-// traffic). Audio append counts/bytes are still captured in span attrs.
+// dumpWSFrame traces a single WebSocket frame to the session log.
 //
-// Sized at one stderr line per frame so it can be `tee`'d for protocol
-// debugging without parsing.
+// Outbound `input_audio_buffer.append` frames are skipped (one every
+// ~50ms, kilobytes of base64 each — drowns the interesting protocol
+// traffic). Counts/bytes are still captured in span attrs. Skip is
+// direction-gated so no inbound event can ever be filtered out
+// accidentally by a substring collision: the invariant we want is
+// "every frame the server sends us is visible in the trace log."
+//
+// Always on so the raw protocol transcript is available after the fact
+// to diagnose backend-specific event shape mismatches (e.g. a backend
+// that ships transcription deltas under a different field name than the
+// OpenAI-realtime spec).
 func dumpWSFrame(direction string, data []byte) {
-	if os.Getenv("VOCIS_WS_DUMP") != "1" {
+	if direction == "→" && strings.Contains(string(data), `"type":"input_audio_buffer.append"`) {
 		return
 	}
-	if strings.Contains(string(data), `"type":"input_audio_buffer.append"`) {
-		return
-	}
-	ts := time.Now().Format("15:04:05.000")
-	fmt.Fprintf(os.Stderr, "[ws %s %s] %s\n", ts, direction, data)
+	sessionlog.Tracef("ws %s %s", direction, data)
 }
 
 // ---------------------------------------------------------------------------
@@ -1405,7 +1502,15 @@ func (s *Stream) readLoop() {
 			sessionlog.Debugf("realtime: %s", msgType)
 		case "conversation.item.input_audio_transcription.delta":
 			var event transcriptionDeltaEvent
-			if err := raw.decode(&event); err == nil && event.Delta != "" {
+			if err := raw.decode(&event); err != nil {
+				sessionlog.Warnf("realtime: delta decode failed: %v payload=%s", err, truncate(string(data), 200))
+			} else if event.Delta == "" {
+				// Backend emitted a delta frame but the text is empty under
+				// the spec-standard `delta` key. Most likely the backend
+				// uses a non-standard field name — log the full payload so
+				// we can tell what to map.
+				sessionlog.Warnf("realtime: delta event has empty text under 'delta' key — backend field mismatch? payload=%s", truncate(string(data), 400))
+			} else {
 				partial := s.appendPartial(event.ItemID, event.Delta)
 				s.emitPartial(StreamEvent{Type: StreamEventPartial, Text: partial})
 			}

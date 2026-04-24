@@ -3,21 +3,24 @@ package transcribe
 import "strings"
 
 // deltaStrategyForModel picks a transcription.delta merge strategy based
-// on the model name. Per OpenAI's realtime docs:
+// on the model name:
 //
-//   - whisper-1 (and any Whisper variant): delta = full turn transcript,
-//     same as completed → replace.
-//   - gpt-4o-transcribe / gpt-4o-mini-transcribe: delta = incremental new
-//     text → append.
+//   - whisper-1 (and any Whisper variant), gemma on Lemonade's FLM
+//     runtime: delta = full turn transcript so far → replace.
+//   - gpt-4o-transcribe / gpt-4o-mini-transcribe: delta = incremental
+//     new text → append.
 //
-// Semantics follow the model, not the backend — a Whisper-family model
-// emits cumulative deltas whether it's served by OpenAI, Lemonade, or
-// anything else. Case-insensitive substring match on "whisper" catches
-// OpenAI's whisper-1, Lemonade ids like whisper-v3-turbo-FLM, and any
-// other vendor name that keeps the family label. Unknown or empty model
-// names default to incremental (the modern OpenAI convention).
+// Semantics follow the model, not the backend. Case-insensitive substring
+// matching on "whisper" or "gemma" catches known cumulative emitters:
+// OpenAI's whisper-1, Lemonade ids like whisper-v3-turbo-FLM and
+// gemma4-it-e2b-FLM, plus any vendor that keeps the family label.
+// Unknown or empty model names default to incremental (the modern OpenAI
+// convention) — if a new model turns out to emit cumulative deltas, the
+// symptom is visible immediately as duplicated prefixes on partials, and
+// the fix is to add it here.
 func deltaStrategyForModel(model string) func(existing, delta string) string {
-	if strings.Contains(strings.ToLower(model), "whisper") {
+	lower := strings.ToLower(model)
+	if strings.Contains(lower, "whisper") || strings.Contains(lower, "gemma") {
 		return mergeCumulativeDelta
 	}
 	return mergeIncrementalDelta

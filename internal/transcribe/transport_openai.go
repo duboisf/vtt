@@ -70,19 +70,24 @@ func (t *openaiTransport) SessionUpdate() map[string]any {
 		transcription["prompt"] = prompt
 	}
 
+	input := map[string]any{
+		"format": map[string]any{
+			"type": "audio/pcm",
+			"rate": openaiSampleRate,
+		},
+		"transcription":  transcription,
+		"turn_detection": t.turnDetectionPayload(),
+	}
+	if nr := strings.TrimSpace(t.streaming.NoiseReduction); nr != "" {
+		input["noise_reduction"] = map[string]any{"type": nr}
+	}
+
 	return map[string]any{
 		"type": "session.update",
 		"session": map[string]any{
 			"type": "transcription",
 			"audio": map[string]any{
-				"input": map[string]any{
-					"format": map[string]any{
-						"type": "audio/pcm",
-						"rate": openaiSampleRate,
-					},
-					"transcription":  transcription,
-					"turn_detection": t.turnDetectionPayload(),
-				},
+				"input": input,
 			},
 		},
 	}
@@ -95,13 +100,26 @@ func (t *openaiTransport) prompt() string {
 	return config.DefaultPromptHint
 }
 
+// turnDetectionPayload builds OpenAI's server-VAD config. The `type`
+// field is always sent — OpenAI's default turn_detection is null (no
+// server VAD), so omitting the wrapper would disable live transcription
+// entirely. Sub-fields at zero are omitted so OpenAI's own per-field
+// defaults apply (threshold=0.5, silence_duration_ms=500,
+// prefix_padding_ms=300 as of 2025).
 func (t *openaiTransport) turnDetectionPayload() any {
-	return map[string]any{
-		"type":                "server_vad",
-		"prefix_padding_ms":   t.streaming.PrefixPaddingMS,
-		"silence_duration_ms": t.streaming.SilenceDurationMS,
-		"threshold":           t.streaming.Threshold,
+	payload := map[string]any{
+		"type": "server_vad",
 	}
+	if t.streaming.Threshold > 0 {
+		payload["threshold"] = t.streaming.Threshold
+	}
+	if t.streaming.SilenceDurationMS > 0 {
+		payload["silence_duration_ms"] = t.streaming.SilenceDurationMS
+	}
+	if t.streaming.PrefixPaddingMS > 0 {
+		payload["prefix_padding_ms"] = t.streaming.PrefixPaddingMS
+	}
+	return payload
 }
 
 func (t *openaiTransport) createClientSecret(ctx context.Context) (string, error) {
@@ -137,6 +155,11 @@ func (t *openaiTransport) clientSecretParams() realtime.ClientSecretNewParams {
 	if td := t.turnDetectionParam(); td != nil {
 		input.TurnDetection = *td
 	}
+	if nr := strings.TrimSpace(t.streaming.NoiseReduction); nr != "" {
+		input.NoiseReduction = realtime.RealtimeTranscriptionSessionAudioInputNoiseReductionParam{
+			Type: realtime.NoiseReductionType(nr),
+		}
+	}
 
 	return realtime.ClientSecretNewParams{
 		Session: realtime.ClientSecretNewParamsSessionUnion{
@@ -163,13 +186,23 @@ func (t *openaiTransport) audioTranscriptionParam() realtime.AudioTranscriptionP
 }
 
 func (t *openaiTransport) turnDetectionParam() *realtime.RealtimeTranscriptionSessionAudioInputTurnDetectionUnionParam {
+	// Zero-valued fields are omitted so OpenAI's per-field defaults apply.
+	// Type is always set because the default turn_detection is null (no
+	// server VAD) — omitting it would disable live transcription.
+	vad := &realtime.RealtimeTranscriptionSessionAudioInputTurnDetectionServerVadParam{
+		Type: "server_vad",
+	}
+	if t.streaming.PrefixPaddingMS > 0 {
+		vad.PrefixPaddingMs = openaisdk.Int(int64(t.streaming.PrefixPaddingMS))
+	}
+	if t.streaming.SilenceDurationMS > 0 {
+		vad.SilenceDurationMs = openaisdk.Int(int64(t.streaming.SilenceDurationMS))
+	}
+	if t.streaming.Threshold > 0 {
+		vad.Threshold = openaisdk.Float(t.streaming.Threshold)
+	}
 	return &realtime.RealtimeTranscriptionSessionAudioInputTurnDetectionUnionParam{
-		OfServerVad: &realtime.RealtimeTranscriptionSessionAudioInputTurnDetectionServerVadParam{
-			Type:              "server_vad",
-			PrefixPaddingMs:   openaisdk.Int(int64(t.streaming.PrefixPaddingMS)),
-			SilenceDurationMs: openaisdk.Int(int64(t.streaming.SilenceDurationMS)),
-			Threshold:         openaisdk.Float(t.streaming.Threshold),
-		},
+		OfServerVad: vad,
 	}
 }
 

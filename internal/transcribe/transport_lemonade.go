@@ -84,16 +84,34 @@ func (t *lemonadeTransport) buildURL() (string, error) {
 }
 
 func (t *lemonadeTransport) SessionUpdate() map[string]any {
-	// Manual-commit mode sets turn_detection to JSON null (Go nil marshals
-	// to null under encoding/json). Lemonade PR #1607 honors null by
-	// disabling server-side VAD and the interim transcription work that
-	// otherwise ran in parallel with commit.
 	session := map[string]any{
-		"model":          t.cfg.Model,
-		"turn_detection": t.turnDetectionPayload(),
+		"model": t.cfg.Model,
+	}
+	if td, include := t.turnDetectionPayload(); include {
+		// Manual-commit mode sends turn_detection=null. Lemonade PR #1607
+		// honors null by disabling server-side VAD and the interim
+		// transcription work that otherwise ran in parallel with commit.
+		session["turn_detection"] = td
 	}
 	if language := strings.TrimSpace(t.cfg.Language); language != "" {
 		session["language"] = language
+	}
+	if prompt := strings.TrimSpace(t.cfg.PromptHint); prompt != "" {
+		// Pass the prompt hint at the session level. Lemonade's schema
+		// is flat (unlike OpenAI's nested audio.input.transcription.prompt),
+		// so sibling to model/language is the natural placement. For
+		// Whisper-family models this biases vocabulary (short keyword
+		// lists work best). For LLM-based transcribers like Gemma-FLM,
+		// full instructions can shape punctuation, capitalization, and
+		// cleanup behavior.
+		session["prompt"] = prompt
+	}
+	if nr := strings.TrimSpace(t.streaming.NoiseReduction); nr != "" {
+		// Pass through any noise_reduction setting. Lemonade currently
+		// ignores unknown session fields silently; including this now
+		// means vocis picks up the feature the moment Lemonade lands
+		// support, with no client-side change needed.
+		session["noise_reduction"] = map[string]any{"type": nr}
 	}
 	return map[string]any{
 		"type":    "session.update",
@@ -101,25 +119,37 @@ func (t *lemonadeTransport) SessionUpdate() map[string]any {
 	}
 }
 
-// turnDetectionPayload builds Lemonade's VAD config, or returns a true
-// nil (JSON null) when manual-commit mode is on. Return type is `any` so
-// the nil case serializes as `null` and compares equal to nil at the
-// interface level — returning a typed `map[string]any(nil)` would
-// JSON-encode as null but show up as non-nil when read back from the
-// surrounding map[string]any. Note that Lemonade's `threshold` is RMS
-// energy (0-1, default 0.01), NOT the 0-1 probability OpenAI uses — they
-// share a field name but not semantics. We pass streaming.Threshold
-// through unchanged so the user can tune it in config, but vocis warns
-// if the configured value looks like an OpenAI-shaped threshold (> 0.1)
-// that will almost certainly reject all speech against Lemonade's RMS
-// scale.
-func (t *lemonadeTransport) turnDetectionPayload() any {
+// turnDetectionPayload builds Lemonade's VAD config. Returns (payload,
+// include) so callers can distinguish three cases:
+//   - (nil, true): send turn_detection=null to disable server VAD
+//     (manual-commit mode).
+//   - (map, true): send an explicit turn_detection with user-set fields.
+//     Fields left at zero are omitted so Lemonade fills them with its
+//     own defaults (threshold=0.01, silence_duration_ms=800,
+//     prefix_padding_ms=250 as of Lemonade 10.2).
+//   - (nil, false): omit the turn_detection key entirely so ALL Lemonade
+//     defaults apply (no partial overrides).
+//
+// Lemonade's `threshold` is RMS energy (0-1), NOT the 0-1 probability
+// OpenAI uses — they share a field name but not semantics. vocis warns
+// separately if the configured value looks like an OpenAI-shaped
+// threshold (> 0.1) that would reject all speech on Lemonade's scale.
+func (t *lemonadeTransport) turnDetectionPayload() (any, bool) {
 	if t.streaming.ManualCommit {
-		return nil
+		return nil, true
 	}
-	return map[string]any{
-		"threshold":           t.streaming.Threshold,
-		"silence_duration_ms": t.streaming.SilenceDurationMS,
-		"prefix_padding_ms":   t.streaming.PrefixPaddingMS,
+	payload := map[string]any{}
+	if t.streaming.Threshold > 0 {
+		payload["threshold"] = t.streaming.Threshold
 	}
+	if t.streaming.SilenceDurationMS > 0 {
+		payload["silence_duration_ms"] = t.streaming.SilenceDurationMS
+	}
+	if t.streaming.PrefixPaddingMS > 0 {
+		payload["prefix_padding_ms"] = t.streaming.PrefixPaddingMS
+	}
+	if len(payload) == 0 {
+		return nil, false
+	}
+	return payload, true
 }

@@ -358,13 +358,14 @@ func (a *App) startRecordingLocked(ctx context.Context) {
 
 	a.sequence++
 	state := &recordingState{
-		id:        a.sequence,
-		startedAt: time.Now(),
-		session:   session,
-		cancel:    cancel,
-		target:    target,
-		span:      recordingSpan,
-		spanCtx:   spanCtx,
+		id:         a.sequence,
+		startedAt:  time.Now(),
+		session:    session,
+		cancel:     cancel,
+		target:     target,
+		span:       recordingSpan,
+		spanCtx:    spanCtx,
+		submitMode: a.cfg.Insertion.AutoSubmit,
 	}
 	dictation, err := a.transcribe.StartDictation(recordCtx, transcribe.DictationOpts{
 		SampleRate: a.cfg.Recording.SampleRate,
@@ -399,6 +400,9 @@ func (a *App) startRecordingLocked(ctx context.Context) {
 	state.activeSpan = activeSpan
 	a.recording = state
 	a.overlay.ShowListening(target.WindowClass, a.cfg.HotkeyMode)
+	if state.submitMode {
+		a.overlay.SetSubmitMode(true)
+	}
 	sessionlog.Infof("recording started: %d Hz, %d channel(s), connecting realtime transcription",
 		state.session.SampleRate(), state.session.Channels())
 	go a.consumeDictationEvents(recordCtx, state)

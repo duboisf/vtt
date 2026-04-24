@@ -20,6 +20,8 @@ func TestDeltaStrategyForModel(t *testing.T) {
 		{"whisper-large-v3 replaces", "whisper-large-v3", "Ok", "OK I", "OK I"},
 		{"whisper-v3-turbo-FLM replaces", "whisper-v3-turbo-FLM", "Ok", "OK I", "OK I"},
 		{"Whisper mixed case replaces", "Whisper-1", "Ok", "OK I", "OK I"},
+		{"gemma4-it-e2b-FLM replaces", "gemma4-it-e2b-FLM", "Ok", "OK I", "OK I"},
+		{"Gemma mixed case replaces", "Gemma-2", "Ok", "OK I", "OK I"},
 		{"gpt-4o-transcribe appends", "gpt-4o-transcribe", "Ok", " I", "Ok I"},
 		{"gpt-4o-mini-transcribe appends", "gpt-4o-mini-transcribe", "Ok", " I", "Ok I"},
 		{"non-whisper model appends", "parakeet-rnnt", "Ok", " I", "Ok I"},

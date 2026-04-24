@@ -189,6 +189,12 @@ type TranscriptionConfig struct {
 	PromptHint   string   `yaml:"prompt_hint"`
 	Vocabulary   []string `yaml:"vocabulary"`
 	RequestLimit int      `yaml:"request_timeout_seconds"`
+	// HallucinationFilters drops finals whose trimmed text exactly
+	// matches one of these entries (case-insensitive). Whisper and
+	// Gemma-FLM routinely hallucinate stock phrases — "Thank you.",
+	// "Thanks for watching." — on silence or very quiet audio. Exact
+	// match only; a substring filter would eat legitimate speech.
+	HallucinationFilters []string `yaml:"hallucination_filters"`
 }
 
 const (
@@ -242,6 +248,14 @@ type StreamingConfig struct {
 	// first-request model load + inference. Scaled timeout is max(this,
 	// trailing_duration / 5).
 	WaitFinalSeconds int `yaml:"wait_final_seconds"`
+	// NoiseReduction turns on server-side noise reduction before audio
+	// hits VAD and the transcription model. Accepted values on OpenAI
+	// are "near_field" (close-talk mics, headsets) and "far_field"
+	// (laptop built-ins, conference mics). Empty string disables it.
+	// OpenAI honors this field; Lemonade currently ignores unknown
+	// session fields, so setting it there is harmless but has no
+	// effect until Lemonade adds the feature.
+	NoiseReduction string `yaml:"noise_reduction"`
 }
 
 type InsertionConfig struct {
@@ -251,6 +265,11 @@ type InsertionConfig struct {
 	TypeDelayMS      int      `yaml:"type_delay_ms"`
 	RestoreClipboard bool     `yaml:"restore_clipboard"`
 	TerminalClasses  []string `yaml:"terminal_classes"`
+	// AutoSubmit defaults every dictation to "submit mode" — after the
+	// transcript is pasted, an Enter/Return keypress is sent. Useful
+	// when you dictate mostly into chat inputs that send on Enter.
+	// Can still be toggled off per-session by tapping the hotkey.
+	AutoSubmit bool `yaml:"auto_submit"`
 }
 
 type OverlayConfig struct {
@@ -338,6 +357,16 @@ func Default() Config {
 				"GPT",
 				"Vocis",
 			},
+			HallucinationFilters: []string{
+				"Thank you.",
+				"Thanks.",
+				"Thanks for watching.",
+				"Thanks for watching!",
+				"Please subscribe.",
+				"Bye.",
+				"you",
+				".",
+			},
 		},
 		Recording: RecordingConfig{
 			Backend:            "auto",
@@ -355,14 +384,17 @@ func Default() Config {
 			// OpenAI users who want live partials should flip
 			// ManualCommit=false, ClientVAD=false, ShowPartialOverlay=true.
 			ShowPartialOverlay: false,
-			PrefixPaddingMS:    300,
-			SilenceDurationMS:  500,
-			// 0.02 is an energy-threshold tuned for Silero client VAD —
-			// the previous 0.5 was appropriate for server-VAD prob-mass
-			// thresholds, which we no longer use by default.
-			Threshold:    0.02,
-			ManualCommit: true,
-			ClientVAD:    true,
+			// Zero values leave the VAD knobs unset, so each backend
+			// uses its own server-VAD defaults (Lemonade: threshold=0.01,
+			// silence=800, prefix=250; OpenAI: threshold=0.5, silence=500,
+			// prefix=300). Override per-field only if you know the scale
+			// for the backend you're targeting — Lemonade's threshold is
+			// RMS energy, OpenAI's is a probability.
+			PrefixPaddingMS:   0,
+			SilenceDurationMS: 0,
+			Threshold:         0,
+			ManualCommit:      true,
+			ClientVAD:         true,
 			// $HOME/opt/onnxruntime/lib/... is where the onnxruntime
 			// release tarball lands when unpacked into ~/opt — the
 			// documented install location. resolveOnnxruntimeLibrary
@@ -647,6 +679,12 @@ func (c Config) Validate() error {
 
 	if c.Streaming.WaitFinalSeconds < 1 || c.Streaming.WaitFinalSeconds > 60 {
 		return errors.New("streaming.wait_final_seconds must be between 1 and 60")
+	}
+
+	switch c.Streaming.NoiseReduction {
+	case "", "near_field", "far_field":
+	default:
+		return fmt.Errorf("streaming.noise_reduction must be near_field, far_field, or empty; got %q", c.Streaming.NoiseReduction)
 	}
 
 	if c.Streaming.MinUtteranceMS < 0 || c.Streaming.MinUtteranceMS > 10000 {
