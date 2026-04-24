@@ -199,7 +199,13 @@ type TranscriptionConfig struct {
 	Language     string   `yaml:"language"`
 	PromptHint   string   `yaml:"prompt_hint"`
 	Vocabulary   []string `yaml:"vocabulary"`
-	RequestLimit int      `yaml:"request_timeout_seconds"`
+	// RequestLimit is the HTTP request timeout (seconds) applied to the
+	// transcription SDK client. Gates postprocess `/chat/completions`
+	// and any OpenAI REST calls (ephemeral client_secret mint). Set to
+	// 0 to disable the timeout entirely — useful on Lemonade where a
+	// cold local model load can legitimately take minutes. The WS
+	// handshake and write deadlines still get a 5 s floor regardless.
+	RequestLimit int `yaml:"request_timeout_seconds"`
 	// HallucinationFilters drops finals whose trimmed text exactly
 	// matches one of these entries (case-insensitive). Whisper and
 	// Gemma-FLM routinely hallucinate stock phrases — "Thank you.",
@@ -678,8 +684,8 @@ func (c Config) Validate() error {
 		return fmt.Errorf("hotkey_mode must be hold or toggle")
 	}
 
-	if c.Transcription.RequestLimit <= 0 || c.Transcription.RequestLimit > 300 {
-		return errors.New("transcription.request_timeout_seconds must be between 1 and 300")
+	if c.Transcription.RequestLimit < 0 || c.Transcription.RequestLimit > 300 {
+		return errors.New("transcription.request_timeout_seconds must be between 0 (disabled) and 300")
 	}
 
 	switch c.Insertion.Mode {

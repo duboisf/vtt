@@ -61,7 +61,16 @@ func New(apiKey string, cfg config.TranscriptionConfig, streaming config.Streami
 
 	opts := []option.RequestOption{
 		option.WithBaseURL(baseURL),
-		option.WithRequestTimeout(timeout),
+	}
+	// RequestLimit=0 disables the HTTP request timeout entirely — useful
+	// when pointing at Lemonade, whose first-request postprocess call
+	// can take minutes on a cold local model load. Only apply a timeout
+	// when the user picked a positive value. The WS write / handshake
+	// timeouts further down still get a 5 s floor via minDuration.
+	if timeout > 0 {
+		opts = append(opts, option.WithRequestTimeout(timeout))
+	} else {
+		sessionlog.Infof("transcription: request timeout disabled (request_timeout_seconds=0)")
 	}
 	// Only attach an API key when one is actually configured. Passing
 	// WithAPIKey("") makes the SDK send `Authorization: Bearer ` (empty
