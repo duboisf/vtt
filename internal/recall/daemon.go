@@ -512,7 +512,11 @@ func (d *Daemon) transcribeSegment(_ context.Context, id int64, postprocess bool
 	// Feed the segment PCM as a pretend live stream. 2048 samples per
 	// chunk (~128 ms at 16 kHz) matches the rough granularity the
 	// recorder emits and keeps the transport's write bursts modest.
-	feedCtx, feedSpan := telemetry.StartSpan(spanCtx, "vocis.recall.transcribe.feed",
+	// feedCtx must be parented under dictCtx so a dictation timeout or
+	// consumer failure releases the send on `samples` — spanCtx is the
+	// root OTel context and never cancels, which would deadlock the
+	// feed goroutine holding transcribeMu.
+	feedCtx, feedSpan := telemetry.StartSpan(dictCtx, "vocis.recall.transcribe.feed",
 		attribute.Int("feed.chunk_samples", 2048),
 	)
 	const feedChunk = 2048
